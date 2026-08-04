@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { OPEN_PROJECTS_STORAGE_KEY, loadOpenProjects, saveOpenProjects } from "./projects.ts";
+import { OPEN_PROJECTS_STORAGE_KEY, loadOpenProjects, saveOpenProjects, getProjectDisplayName } from "./projects.ts";
 
 function createStorage(initial = {}) {
   const values = new Map(Object.entries(initial));
@@ -26,13 +26,25 @@ test("returns an empty list when nothing is stored", () => {
 test("round-trips pinned projects with their last cwd", () => {
   const storage = createStorage();
   saveOpenProjects(storage, [
-    { root: "/home/user/repo-a", lastCwd: "/home/user/repo-a" },
+    { root: "/home/user/repo-a", lastCwd: "/home/user/repo-a", name: "Repo A" },
     { root: "/home/user/repo-b", lastCwd: "/home/user/repo-b/worktrees/feat" },
   ]);
   assert.deepEqual(loadOpenProjects(storage), [
-    { root: "/home/user/repo-a", lastCwd: "/home/user/repo-a" },
+    { root: "/home/user/repo-a", lastCwd: "/home/user/repo-a", name: "Repo A" },
     { root: "/home/user/repo-b", lastCwd: "/home/user/repo-b/worktrees/feat" },
   ]);
+});
+
+test("getProjectDisplayName prefers the custom name then the folder name", () => {
+  const projects = [
+    { root: "/home/user/repo-a", lastCwd: null, name: "  My Repo  " },
+    { root: "/home/user/repo-b", lastCwd: null },
+    { root: "/home/user/repo-c", lastCwd: null, name: "   " },
+  ];
+  assert.equal(getProjectDisplayName(projects, "/home/user/repo-a"), "My Repo");
+  assert.equal(getProjectDisplayName(projects, "/home/user/repo-b"), "repo-b");
+  assert.equal(getProjectDisplayName(projects, "/home/user/repo-c"), "repo-c");
+  assert.equal(getProjectDisplayName([], "/only/root"), "root");
 });
 
 test("drops invalid entries and tolerates missing lastCwd", () => {

@@ -1,6 +1,16 @@
-import { useEffect, useLayoutEffect, useState, useCallback, useRef, type CSSProperties, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useState,
+  useCallback,
+  useMemo,
+  useRef,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import type { SessionInfo } from "@/lib/types";
 import type { OpenProject } from "@/lib/projects";
+import { getProjectDisplayName } from "@/lib/projects";
 import { APP_VERSION, PI_VERSION } from "@/lib/app-version";
 import { useI18n } from "@/i18n";
 import {
@@ -13,7 +23,7 @@ import {
   sessionDateGroup,
   type SessionDateGroup,
 } from "@/lib/session-list";
-import { getFileName } from "@/lib/file-paths";
+import { ProjectMenu } from "./ProjectMenu";
 
 interface Props {
   selectedSessionId: string | null;
@@ -30,6 +40,8 @@ interface Props {
   activeProjectRoot?: string | null;
   onActivateProject?: (root: string) => void;
   onRemoveProject?: (root: string) => void;
+  /** Ask the shell to open the rename dialog for a project. */
+  onRenameProject?: (root: string) => void;
 }
 
 interface WorktreeEntry {
@@ -358,6 +370,7 @@ export function SessionSidebar({
   activeProjectRoot,
   onActivateProject,
   onRemoveProject,
+  onRenameProject,
 }: Props) {
   const { t } = useI18n();
   const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
@@ -368,6 +381,17 @@ export function SessionSidebar({
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [projectFilter, setProjectFilter] = useState("");
   const [sessionFilter, setSessionFilter] = useState("");
+  // Projects manually expanded in the sidebar tree (the active project is
+  // always expanded; searching expands every matching project).
+  const [expandedProjectRoots, setExpandedProjectRoots] = useState<Set<string>>(() => new Set());
+  const toggleProjectExpanded = useCallback((root: string) => {
+    setExpandedProjectRoots((prev) => {
+      const next = new Set(prev);
+      if (next.has(root)) next.delete(root);
+      else next.add(root);
+      return next;
+    });
+  }, []);
   const [customPathOpen, setCustomPathOpen] = useState(false);
   const [customPathValue, setCustomPathValue] = useState("");
   const [customPathError, setCustomPathError] = useState<string | null>(null);
@@ -805,12 +829,16 @@ export function SessionSidebar({
     if (!selectedCwd) return;
     // Generate a temporary UUID client-side — no backend call needed.
     // Pi will be spawned lazily when the user sends the first message.
-    const tempId =
-      typeof crypto.randomUUID === "function"
-        ? crypto.randomUUID()
-        : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
-    onNewSession?.(tempId, selectedCwd);
+    onNewSession?.(makeTempSessionId(), selectedCwd);
   }, [selectedCwd, onNewSession]);
+
+  const handleNewSessionInProject = useCallback(
+    (root: string) => {
+      onActivateProject?.(root);
+      onNewSession?.(makeTempSessionId(), root);
+    },
+    [onActivateProject, onNewSession],
+  );
 
   const recentProjects = getRecentProjects(allSessions);
   const showProjectFilter = recentProjects.length > 8;
@@ -818,12 +846,64 @@ export function SessionSidebar({
     ? recentProjects.filter((p) => p.toLowerCase().includes(projectFilter.trim().toLowerCase()))
     : recentProjects;
 
+  // Sidebar project tree: pinned projects first, then projects that own
+  // sessions (ordered by recency), then any remaining session directories.
+  const sidebarProjectRoots = useMemo(() => {
+    const roots: string[] = [];
+    const seen = new Set<string>();
+    for (const project of openProjects) {
+      if (!seen.has(project.root)) {
+        seen.add(project.root);
+        roots.push(project.root);
+      }
+    }
+    for (const root of recentProjects) {
+      if (!seen.has(root)) {
+        seen.add(root);
+        roots.push(root);
+      }
+    }
+    for (const session of allSessions) {
+      const root = session.projectRoot ?? session.cwd;
+      if (root && !seen.has(root)) {
+        seen.add(root);
+        roots.push(root);
+      }
+    }
+    return roots;
+  }, [openProjects, recentProjects, allSessions]);
+
+  const sessionsForProjectRoot = useCallback(
+    (root: string): SessionInfo[] => allSessions.filter((s) => (s.projectRoot ?? s.cwd) === root),
+    [allSessions],
+  );
+
+  // Group + tree sessions of one project (respecting the search filter).
+  const projectSessionGroups = useCallback(
+    (root: string): { id: SessionDateGroup; label: string; nodes: SessionTreeNode[] }[] => {
+      const filtered = filterSessionsForQuery(sessionsForProjectRoot(root), sessionFilter);
+      const tree = buildSessionTree(filtered);
+      const groups: { id: SessionDateGroup; label: string; nodes: SessionTreeNode[] }[] = [
+        { id: "today", label: t("sessionsToday", "Today"), nodes: [] },
+        { id: "recent", label: t("sessionsRecent", "Last 7 days"), nodes: [] },
+        { id: "older", label: t("sessionsOlder", "Older"), nodes: [] },
+      ];
+      for (const node of tree) {
+        groups.find((group) => group.id === sessionDateGroup(node.session.modified))?.nodes.push(node);
+      }
+      return groups;
+    },
+    [sessionsForProjectRoot, sessionFilter, t],
+  );
+
+  function makeTempSessionId(): string {
+    return typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+  }
+
   // Sessions of every worktree in the selected project are shown together
   const selectedProject = projectRootFor(selectedCwd);
-  const projectSessions = selectedProject
-    ? allSessions.filter((s) => (s.projectRoot ?? s.cwd) === selectedProject)
-    : allSessions;
-  const filteredSessions = filterSessionsForQuery(projectSessions, sessionFilter);
   const showWorktreeSwitcher = Boolean(
     worktreeState?.isGit && worktreeState.isTopLevel && selectedCwd && selectedProject === worktreeState.projectRoot,
   );
@@ -849,159 +929,8 @@ export function SessionSidebar({
         }
       : null);
 
-  // Build parent-child tree within the filtered set
-  const sessionTree = buildSessionTree(filteredSessions);
-  const sessionGroups: { id: SessionDateGroup; label: string; nodes: SessionTreeNode[] }[] = [
-    { id: "today", label: t("sessionsToday", "Today"), nodes: [] },
-    { id: "recent", label: t("sessionsRecent", "Last 7 days"), nodes: [] },
-    { id: "older", label: t("sessionsOlder", "Older"), nodes: [] },
-  ];
-  for (const node of sessionTree) {
-    sessionGroups.find((group) => group.id === sessionDateGroup(node.session.modified))?.nodes.push(node);
-  }
-
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
-      {/* Project chips — one window can pin several folder projects; clicking a
-          chip switches the active project without closing other projects' chats */}
-      {openProjects.length > 0 && (
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 4,
-            padding: "8px 8px 0",
-            overflowX: "auto",
-            overflowY: "hidden",
-            flexShrink: 0,
-            scrollbarWidth: "thin",
-          }}
-        >
-          {openProjects.map((project) => {
-            const isActive = project.root === activeProjectRoot;
-            const projectName = getFileName(project.root) || project.root;
-            return (
-              <div
-                key={project.root}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  flexShrink: 0,
-                  background: isActive ? "var(--bg-selected)" : "var(--bg-hover)",
-                  border: `1px solid ${isActive ? "var(--accent-soft-border)" : "var(--border)"}`,
-                  borderRadius: 7,
-                  overflow: "hidden",
-                  transition: "border-color 0.12s, background 0.12s",
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={() => onActivateProject?.(project.root)}
-                  title={project.root}
-                  aria-pressed={isActive}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 5,
-                    maxWidth: 168,
-                    padding: "4px 4px 4px 8px",
-                    background: "none",
-                    border: "none",
-                    color: isActive ? "var(--text)" : "var(--text-muted)",
-                    cursor: "pointer",
-                    fontSize: 11,
-                    fontWeight: isActive ? 600 : 400,
-                    textAlign: "left",
-                  }}
-                >
-                  <svg
-                    width="11"
-                    height="11"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    style={{ flexShrink: 0 }}
-                    aria-hidden="true"
-                  >
-                    <path d="M3 5a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
-                  </svg>
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {projectName}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onRemoveProject?.(project.root)}
-                  title={t("removeProject", "Remove project")}
-                  aria-label={t("removeProject", "Remove project")}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    width: 22,
-                    height: 22,
-                    margin: 1,
-                    padding: 0,
-                    background: "none",
-                    border: "none",
-                    borderRadius: 5,
-                    color: "var(--text-dim)",
-                    cursor: "pointer",
-                    flexShrink: 0,
-                    fontSize: 13,
-                    lineHeight: 1,
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.color = "var(--danger)";
-                    e.currentTarget.style.background = "rgba(220,38,38,0.08)";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.color = "var(--text-dim)";
-                    e.currentTarget.style.background = "none";
-                  }}
-                >
-                  ×
-                </button>
-              </div>
-            );
-          })}
-          <button
-            type="button"
-            onClick={() => setDropdownOpen(true)}
-            title={t("addProject", "Add project")}
-            aria-label={t("addProject", "Add project")}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              width: 26,
-              height: 26,
-              padding: 0,
-              flexShrink: 0,
-              background: "none",
-              border: "1px dashed var(--border)",
-              borderRadius: 7,
-              color: "var(--text-dim)",
-              cursor: "pointer",
-              fontSize: 14,
-              lineHeight: 1,
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.color = "var(--text)";
-              e.currentTarget.style.borderColor = "var(--accent)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.color = "var(--text-dim)";
-              e.currentTarget.style.borderColor = "var(--border)";
-            }}
-          >
-            +
-          </button>
-        </div>
-      )}
       {/* Header */}
       <div
         style={{
@@ -1939,12 +1868,21 @@ export function SessionSidebar({
         )}
       </div>
 
-      {/* Session list */}
+      {/* Project tree + sessions — sidebar is grouped by project first. */}
       <nav
         aria-label={t("sessions", "Sessions")}
         style={{ flex: "1 1 auto", overflowY: "auto", padding: "0", minHeight: 80 }}
       >
-        <div style={{ padding: "10px 10px 6px" }}>
+        <div
+          style={{
+            padding: "10px 10px 6px",
+            position: "sticky",
+            top: 0,
+            zIndex: 2,
+            background: "var(--bg-panel)",
+            borderBottom: "1px solid var(--border)",
+          }}
+        >
           <div
             style={{
               padding: "0 4px 7px",
@@ -1959,9 +1897,9 @@ export function SessionSidebar({
               textTransform: "uppercase",
             }}
           >
-            <span>{t("sessions", "Sessions")}</span>
-            <span aria-label={`${filteredSessions.length} ${t("sessions", "sessions")}`}>
-              {filteredSessions.length}
+            <span>{t("projects", "Projects")}</span>
+            <span aria-label={`${sidebarProjectRoots.length} ${t("projects", "projects")}`}>
+              {sidebarProjectRoots.length}
             </span>
           </div>
           <div style={{ position: "relative" }}>
@@ -2032,51 +1970,246 @@ export function SessionSidebar({
         </div>
         {loading && <div style={{ padding: "16px 14px", color: "var(--text-muted)", fontSize: 12 }}>Loading...</div>}
         {error && <div style={{ padding: "12px 14px", color: "var(--danger)", fontSize: 12 }}>{error}</div>}
-        {!loading && !error && filteredSessions.length === 0 && (
-          <div style={{ padding: "16px 14px", color: "var(--text-muted)", fontSize: 13 }}>
-            {sessionFilter.trim()
-              ? t("noMatchingSessions", "No matching sessions")
-              : t("noSessionsFound", "No sessions found")}
+        {!loading && !error && sidebarProjectRoots.length === 0 && (
+          <div style={{ padding: "16px 14px", color: "var(--text-muted)", fontSize: 13, lineHeight: 1.5 }}>
+            {t("noProjectsYet", "No projects yet — add a project to start a conversation")}
           </div>
         )}
-        <div style={{ padding: "0 6px 10px", display: "flex", flexDirection: "column", gap: 4 }}>
-          {sessionGroups.map(
-            (group) =>
-              group.nodes.length > 0 && (
-                <section key={group.id} aria-labelledby={`session-group-${group.id}`}>
-                  <div
-                    id={`session-group-${group.id}`}
+        <div style={{ padding: "4px 6px 10px", display: "flex", flexDirection: "column", gap: 2 }}>
+          {sidebarProjectRoots.map((root) => {
+            const isExpanded = Boolean(sessionFilter.trim()) || expandedProjectRoots.has(root);
+            const isPinned = openProjects.some((p) => p.root === root);
+            const projectName = getProjectDisplayName(openProjects, root);
+            const totalCount = sessionsForProjectRoot(root).length;
+            const groups = projectSessionGroups(root);
+            const hasVisibleSessions = groups.some((g) => g.nodes.length > 0);
+            return (
+              <section key={root} aria-labelledby={`project-${root}`}>
+                {/* Project header — always collapsible; only sessions highlight */}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 2,
+                    padding: "3px 4px 3px 2px",
+                    borderRadius: 7,
+                    transition: "background 0.12s",
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => toggleProjectExpanded(root)}
+                    title={isExpanded ? t("collapseProject", "Collapse project") : t("expandProject", "Expand project")}
+                    aria-label={
+                      isExpanded ? t("collapseProject", "Collapse project") : t("expandProject", "Expand project")
+                    }
+                    aria-expanded={isExpanded}
                     style={{
-                      padding: "7px 8px 4px",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      width: 20,
+                      height: 22,
+                      padding: 0,
+                      flexShrink: 0,
+                      background: "none",
+                      border: "none",
+                      borderRadius: 5,
                       color: "var(--text-dim)",
-                      fontSize: 12,
-                      fontWeight: 650,
+                      cursor: "pointer",
                     }}
                   >
-                    {group.label}
-                  </div>
-                  <div role="list" style={{ display: "flex", flexDirection: "column" }}>
-                    {group.nodes.map((node) => (
-                      <SessionTreeItem
-                        key={node.session.id}
-                        node={node}
-                        selectedSessionId={selectedSessionId}
-                        runningSessionIds={runningSessionIds}
-                        unreadSessionIds={unreadSessionIds}
-                        onSelectSession={handleSelectSessionFromList}
-                        onRenamed={loadSessions}
-                        onSessionDeleted={(id) => {
-                          onSessionDeleted?.(id);
-                          void loadSessions();
+                    <svg
+                      width="9"
+                      height="9"
+                      viewBox="0 0 10 10"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      style={{ transform: isExpanded ? "rotate(90deg)" : "none", transition: "transform 0.12s" }}
+                    >
+                      <polyline points="2 3 5 6.5 8 3" />
+                    </svg>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onActivateProject?.(root);
+                      if (sessionFilter.trim()) setSessionFilter("");
+                    }}
+                    title={root}
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      padding: "3px 4px",
+                      background: "none",
+                      border: "none",
+                      color: "var(--text-muted)",
+                      cursor: "pointer",
+                      textAlign: "left",
+                      fontSize: 12,
+                      fontWeight: 450,
+                    }}
+                  >
+                    <svg
+                      width="12"
+                      height="12"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      style={{ flexShrink: 0, color: "var(--text-dim)" }}
+                      aria-hidden="true"
+                    >
+                      <path d="M3 5a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+                    </svg>
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {projectName}
+                    </span>
+                    {totalCount > 0 && (
+                      <span
+                        style={{
+                          flexShrink: 0,
+                          marginLeft: "auto",
+                          fontSize: 10,
+                          color: "var(--text-dim)",
+                          fontFamily: "var(--font-mono)",
                         }}
-                        depth={0}
-                      />
-                    ))}
+                      >
+                        {totalCount}
+                      </span>
+                    )}
+                  </button>
+                  {isPinned && (
+                    <ProjectMenu onRename={() => onRenameProject?.(root)} onRemove={() => onRemoveProject?.(root)} />
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => handleNewSessionInProject(root)}
+                    title={`${t("newSessionIn", "New session")}: ${projectName}`}
+                    aria-label={`${t("newSessionIn", "New session")}: ${projectName}`}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      width: 20,
+                      height: 22,
+                      padding: 0,
+                      background: "none",
+                      border: "none",
+                      borderRadius: 5,
+                      color: "var(--text-dim)",
+                      cursor: "pointer",
+                      flexShrink: 0,
+                      fontSize: 13,
+                      lineHeight: 1,
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.color = "var(--accent)";
+                      e.currentTarget.style.background = "var(--bg-hover)";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.color = "var(--text-dim)";
+                      e.currentTarget.style.background = "none";
+                    }}
+                  >
+                    +
+                  </button>
+                </div>
+                {isExpanded && (
+                  <div style={{ padding: "2px 0 6px 12px" }}>
+                    {hasVisibleSessions ? (
+                      groups.map(
+                        (group) =>
+                          group.nodes.length > 0 && (
+                            <section key={group.id} aria-labelledby={`session-group-${group.id}`}>
+                              <div
+                                id={`session-group-${group.id}`}
+                                style={{
+                                  padding: "7px 8px 4px",
+                                  color: "var(--text-dim)",
+                                  fontSize: 12,
+                                  fontWeight: 650,
+                                }}
+                              >
+                                {group.label}
+                              </div>
+                              <div role="list" style={{ display: "flex", flexDirection: "column" }}>
+                                {group.nodes.map((node) => (
+                                  <SessionTreeItem
+                                    key={node.session.id}
+                                    node={node}
+                                    selectedSessionId={selectedSessionId}
+                                    runningSessionIds={runningSessionIds}
+                                    unreadSessionIds={unreadSessionIds}
+                                    onSelectSession={handleSelectSessionFromList}
+                                    onRenamed={loadSessions}
+                                    onSessionDeleted={(id) => {
+                                      onSessionDeleted?.(id);
+                                      void loadSessions();
+                                    }}
+                                    depth={0}
+                                  />
+                                ))}
+                              </div>
+                            </section>
+                          ),
+                      )
+                    ) : (
+                      <div style={{ padding: "6px 8px 4px", color: "var(--text-dim)", fontSize: 11.5 }}>
+                        {sessionFilter.trim()
+                          ? t("noMatchingSessions", "No matching sessions")
+                          : t("noSessionsInProject", "No sessions in this project yet")}
+                      </div>
+                    )}
                   </div>
-                </section>
-              ),
-          )}
+                )}
+              </section>
+            );
+          })}
         </div>
+        {!loading && !error && sidebarProjectRoots.length > 0 && (
+          <div style={{ padding: "8px 10px 14px" }}>
+            <button
+              type="button"
+              onClick={() => setDropdownOpen(true)}
+              title={t("addProject", "Add project")}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 6,
+                width: "100%",
+                padding: "7px 10px",
+                background: "none",
+                border: "1px dashed var(--border)",
+                borderRadius: 7,
+                color: "var(--text-dim)",
+                cursor: "pointer",
+                fontSize: 12,
+                transition: "color 0.12s, border-color 0.12s",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.color = "var(--text)";
+                e.currentTarget.style.borderColor = "var(--accent)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.color = "var(--text-dim)";
+                e.currentTarget.style.borderColor = "var(--border)";
+              }}
+            >
+              <span style={{ fontSize: 14, lineHeight: 1 }}>+</span>
+              {t("addProject", "Add project")}
+            </button>
+          </div>
+        )}
       </nav>
     </div>
   );

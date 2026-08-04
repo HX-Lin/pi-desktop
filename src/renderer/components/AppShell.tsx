@@ -198,7 +198,7 @@ export function AppShell() {
   // Right panel — file tabs only
   const [fileTabs, setFileTabs] = useState<Tab[]>([]);
   // Embedded terminals are dynamic tabs created via the "+" button.
-  const [terminalTabs, setTerminalTabs] = useState<{ id: string; label: string; cwd: string }[]>([]);
+  const [terminalTabs, setTerminalTabs] = useState<{ id: string; cwd: string }[]>([]);
   const terminalCounterRef = useRef(0);
   const [activeFileTabId, setActiveFileTabId] = useState<string | null>(EXPLORER_TAB_ID);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
@@ -426,6 +426,32 @@ export function AppShell() {
     },
     [activeProjectRoot, isMobile, openProjects, router],
   );
+
+  // Project rename — stored on the pinned project entry (name falls back to
+  // the folder name when cleared).
+  const [renameProjectTarget, setRenameProjectTarget] = useState<{ root: string; currentName: string } | null>(null);
+  const [renameProjectValue, setRenameProjectValue] = useState("");
+  const renameProjectInputRef = useRef<HTMLInputElement>(null);
+  const handleRequestRenameProject = useCallback(
+    (root: string) => {
+      const entry = openProjects.find((p) => p.root === root);
+      setRenameProjectTarget({ root, currentName: (entry?.name?.trim() ?? getFileName(root)) || root });
+      setRenameProjectValue((entry?.name?.trim() ?? getFileName(root)) || root);
+      setTimeout(() => renameProjectInputRef.current?.focus(), 0);
+    },
+    [openProjects],
+  );
+  const handleCommitRenameProject = useCallback(() => {
+    if (!renameProjectTarget) return;
+    setOpenProjects((prev) =>
+      prev.map((p) =>
+        p.root === renameProjectTarget.root
+          ? { ...p, name: renameProjectValue.trim() ? renameProjectValue.trim() : undefined }
+          : p,
+      ),
+    );
+    setRenameProjectTarget(null);
+  }, [renameProjectTarget, renameProjectValue]);
 
   // Deep link + menu actions from Electron main
   useEffect(() => {
@@ -715,10 +741,12 @@ export function AppShell() {
     if (!cwd) return;
     terminalCounterRef.current += 1;
     const id = `${TERMINAL_TAB_PREFIX}${terminalCounterRef.current}`;
-    const label = `${t("terminalLabel", "Terminal")} ${terminalCounterRef.current}`;
-    setTerminalTabs((prev) => [...prev, { id, label, cwd }]);
+    // The visible label is computed from the live index in allTabs below, so
+    // closing a terminal renumbers the survivors (1, 2, 3, …) instead of
+    // counting up forever.
+    setTerminalTabs((prev) => [...prev, { id, cwd }]);
     setActiveFileTabId(id);
-  }, [activeCwd, selectedSession?.cwd, newSessionCwd, t]);
+  }, [activeCwd, selectedSession?.cwd, newSessionCwd]);
 
   // Show chat area if a session is selected, or if we have a cwd to start a new session in
   const effectiveNewSessionCwd = newSessionCwd ?? (selectedSession === null && activeCwd ? activeCwd : null);
@@ -733,10 +761,12 @@ export function AppShell() {
   const showWindowControls = window.piBridge?.platform !== "darwin";
   const windowControlsWidth = showWindowControls ? 142 : 0;
   // Merge embedded terminal tabs with file tabs for the shared TabBar.
+  // Terminal labels are derived from the live index so they always read
+  // "Terminal 1, 2, 3…" for the currently open set.
   const allTabs: Tab[] = [
-    ...terminalTabs.map((terminalTab) => ({
+    ...terminalTabs.map((terminalTab, index) => ({
       id: terminalTab.id,
-      label: terminalTab.label,
+      label: `${t("terminalLabel", "Terminal")} ${index + 1}`,
       filePath: terminalTab.cwd,
       kind: "terminal" as const,
     })),
@@ -764,6 +794,7 @@ export function AppShell() {
         activeProjectRoot={activeProjectRoot}
         onActivateProject={activateProject}
         onRemoveProject={handleRemoveProject}
+        onRenameProject={handleRequestRenameProject}
       />
       <div style={{ padding: "8px", flexShrink: 0 }}>
         <button
@@ -1474,78 +1505,128 @@ export function AppShell() {
           </div>
 
           {/* Chat content */}
-          <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
-            {showChat ? (
-              <ChatWindow
-                key={sessionKey}
-                session={selectedSession}
-                newSessionCwd={effectiveNewSessionCwd}
-                onAgentEnd={handleAgentEnd}
-                onSessionCreated={handleSessionCreated}
-                onSessionForked={handleSessionForked}
-                modelsRefreshKey={modelsRefreshKey}
-                chatInputRef={chatInputRef}
-                onSessionStatsChange={handleSessionStatsChange}
-                onSessionStatsPanelOpen={openSessionStatsPanel}
-                onContextUsageChange={handleContextUsageChange}
-                onOpenFile={handleOpenLinkedFile}
-              />
-            ) : showPlaceholder ? (
-              activeCwd ? (
-                <div
+          <div style={{ flex: 1, overflow: "hidden", position: "relative", display: "flex", flexDirection: "column" }}>
+            {/* Current project path — shown above the composer so the active
+                project's location is always visible (sidebar only highlights
+                sessions now). */}
+            {showChat && (activeProjectRoot ?? activeCwd ?? newSessionCwd) && (
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  height: 30,
+                  padding: "0 12px",
+                  flexShrink: 0,
+                  background: "var(--bg-panel)",
+                  borderBottom: "1px solid var(--border)",
+                  overflow: "hidden",
+                }}
+              >
+                <svg
+                  width="12"
+                  height="12"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="var(--accent)"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  style={{ flexShrink: 0 }}
+                  aria-hidden="true"
+                >
+                  <path d="M3 5a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+                </svg>
+                <span
+                  title={activeProjectRoot ?? activeCwd ?? newSessionCwd ?? undefined}
                   style={{
-                    height: "100%",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
+                    flex: 1,
+                    minWidth: 0,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    fontFamily: "var(--font-mono)",
+                    fontSize: 11,
                     color: "var(--text-muted)",
-                    fontSize: 15,
                   }}
                 >
-                  {t("selectSession", "Select a session from the sidebar")}
-                </div>
-              ) : (
-                <div
-                  style={{
-                    position: "absolute",
-                    top: 12,
-                    left: 12,
-                    display: "flex",
-                    alignItems: "flex-start",
-                    gap: 8,
-                    userSelect: "none",
-                    pointerEvents: "none",
-                  }}
-                >
-                  <svg
-                    width="44"
-                    height="44"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="var(--accent)"
-                    strokeWidth="1.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    style={{ opacity: 0.7, flexShrink: 0 }}
+                  {activeProjectRoot ?? activeCwd ?? newSessionCwd}
+                </span>
+              </div>
+            )}
+            <div style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative" }}>
+              {showChat ? (
+                <ChatWindow
+                  key={sessionKey}
+                  session={selectedSession}
+                  newSessionCwd={effectiveNewSessionCwd}
+                  onAgentEnd={handleAgentEnd}
+                  onSessionCreated={handleSessionCreated}
+                  onSessionForked={handleSessionForked}
+                  modelsRefreshKey={modelsRefreshKey}
+                  chatInputRef={chatInputRef}
+                  onSessionStatsChange={handleSessionStatsChange}
+                  onSessionStatsPanelOpen={openSessionStatsPanel}
+                  onContextUsageChange={handleContextUsageChange}
+                  onOpenFile={handleOpenLinkedFile}
+                />
+              ) : showPlaceholder ? (
+                activeCwd ? (
+                  <div
+                    style={{
+                      height: "100%",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      color: "var(--text-muted)",
+                      fontSize: 15,
+                    }}
                   >
-                    <line x1="20" y1="12" x2="4" y2="12" />
-                    <polyline points="10 6 4 12 10 18" />
-                  </svg>
-                  <div>
-                    <div style={{ fontSize: 18, fontWeight: 600, color: "var(--text)", marginBottom: 8 }}>
-                      {t("getStarted", "Get Started")}
-                    </div>
-                    <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.8 }}>
-                      <span style={{ color: "var(--text-dim)", marginRight: 6 }}>1.</span>
-                      {t("selectProject", "Select a project directory from the sidebar")}
-                      <br />
-                      <span style={{ color: "var(--text-dim)", marginRight: 6 }}>2.</span>
-                      {t("addModelsFromSettings", "Open Settings at the bottom, then add models")}
+                    {t("selectSession", "Select a session from the sidebar")}
+                  </div>
+                ) : (
+                  <div
+                    style={{
+                      position: "absolute",
+                      top: 12,
+                      left: 12,
+                      display: "flex",
+                      alignItems: "flex-start",
+                      gap: 8,
+                      userSelect: "none",
+                      pointerEvents: "none",
+                    }}
+                  >
+                    <svg
+                      width="44"
+                      height="44"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="var(--accent)"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      style={{ opacity: 0.7, flexShrink: 0 }}
+                    >
+                      <line x1="20" y1="12" x2="4" y2="12" />
+                      <polyline points="10 6 4 12 10 18" />
+                    </svg>
+                    <div>
+                      <div style={{ fontSize: 18, fontWeight: 600, color: "var(--text)", marginBottom: 8 }}>
+                        {t("getStarted", "Get Started")}
+                      </div>
+                      <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.8 }}>
+                        <span style={{ color: "var(--text-dim)", marginRight: 6 }}>1.</span>
+                        {t("selectProject", "Select a project directory from the sidebar")}
+                        <br />
+                        <span style={{ color: "var(--text-dim)", marginRight: 6 }}>2.</span>
+                        {t("addModelsFromSettings", "Open Settings at the bottom, then add models")}
+                      </div>
                     </div>
                   </div>
-                </div>
-              )
-            ) : null}
+                )
+              ) : null}
+            </div>
           </div>
         </div>
 
@@ -1557,7 +1638,13 @@ export function AppShell() {
               display: "flex",
               flexDirection: "column",
               borderLeft: "1px solid var(--border)",
-              background: "var(--bg)",
+              // While a terminal tab is active in the niri theme the panel
+              // lets the wallpaper shine straight through — the embedded
+              // xterm draws its own translucent surface (see globals.css).
+              background:
+                isTerminalTabId(activeFileTabId) && document.documentElement.classList.contains("niri")
+                  ? "transparent"
+                  : "var(--bg)",
               "--right-panel-width": `${rightPanelWidth}px`,
               "--right-panel-min-width": `${rightPanelBounds.minWidth}px`,
             } as CSSProperties
@@ -1863,6 +1950,97 @@ export function AppShell() {
         </svg>
       </button>
       <WindowControls />
+      {renameProjectTarget && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 900,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: "rgba(0,0,0,0.4)",
+          }}
+          onClick={() => setRenameProjectTarget(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-label={t("renameProjectTitle", "Rename project")}
+            style={{
+              width: 360,
+              maxWidth: "calc(100vw - 40px)",
+              background: "var(--bg-panel)",
+              border: "1px solid var(--border)",
+              borderRadius: 12,
+              padding: 18,
+              boxShadow: "0 10px 40px rgba(0,0,0,0.3)",
+            }}
+          >
+            <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text)", marginBottom: 4 }}>
+              {t("renameProjectTitle", "Rename project")}
+            </div>
+            <div style={{ fontSize: 11.5, color: "var(--text-dim)", marginBottom: 12, wordBreak: "break-all" }}>
+              {renameProjectTarget.root}
+            </div>
+            <input
+              ref={renameProjectInputRef}
+              value={renameProjectValue}
+              onChange={(e) => setRenameProjectValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleCommitRenameProject();
+                if (e.key === "Escape") setRenameProjectTarget(null);
+              }}
+              placeholder={t("renameProjectPlaceholder", "Name (empty restores the folder name)")}
+              aria-label={t("renameProjectTitle", "Rename project")}
+              style={{
+                width: "100%",
+                padding: "8px 10px",
+                border: "1px solid var(--border)",
+                borderRadius: 7,
+                background: "var(--bg)",
+                color: "var(--text)",
+                fontSize: 13,
+                outline: "none",
+                boxSizing: "border-box",
+              }}
+            />
+            <div style={{ display: "flex", gap: 8, marginTop: 14, justifyContent: "flex-end" }}>
+              <button
+                type="button"
+                onClick={() => setRenameProjectTarget(null)}
+                style={{
+                  padding: "7px 14px",
+                  background: "var(--bg-hover)",
+                  border: "1px solid var(--border)",
+                  borderRadius: 7,
+                  color: "var(--text-muted)",
+                  fontSize: 12,
+                  cursor: "pointer",
+                }}
+              >
+                {t("cancel", "Cancel")}
+              </button>
+              <button
+                type="button"
+                onClick={handleCommitRenameProject}
+                style={{
+                  padding: "7px 14px",
+                  background: "var(--accent)",
+                  border: "none",
+                  borderRadius: 7,
+                  color: "#fff",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                {t("rename", "Rename")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {settingsOpen && (
         <SettingsConfig
           cwd={activeCwd ?? selectedSession?.cwd ?? newSessionCwd ?? null}

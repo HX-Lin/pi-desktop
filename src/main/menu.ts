@@ -49,14 +49,17 @@ export function installAppMenu(getWindow: () => BrowserWindow | null, onCheckFor
       submenu: [
         {
           label: "New Session",
-          accelerator: "CmdOrCtrl+N",
+          // Ctrl+N conflicts with terminal navigation; keep Shift so the
+          // embedded terminal receives the raw key.
+          accelerator: "CmdOrCtrl+Shift+N",
           click: () => {
             getWindow()?.webContents.send("menu:new-session");
           },
         },
         {
           label: "Switch Session…",
-          accelerator: "CmdOrCtrl+K",
+          // Ctrl+K is kill-to-end-of-line in shells.
+          accelerator: "CmdOrCtrl+Shift+K",
           click: () => {
             getWindow()?.webContents.send("menu:switch-session");
           },
@@ -74,26 +77,30 @@ export function installAppMenu(getWindow: () => BrowserWindow | null, onCheckFor
               },
               { type: "separator" as const },
             ]),
-        isMac ? { role: "close" as const } : { role: "quit" as const },
+        isMac ? { role: "close" as const } : { label: "Quit", click: () => app.quit() },
       ],
     },
     {
       label: "Edit",
+      // No accelerators: Ctrl+C/V/X/A/Z must reach the embedded terminal
+      // (SIGINT, paste, kill-word, …). The browser's built-in editing commands
+      // still work inside ordinary inputs.
       submenu: [
-        { role: "undo" },
-        { role: "redo" },
+        { label: "Undo", click: () => getWindow()?.webContents.undo() },
+        { label: "Redo", click: () => getWindow()?.webContents.redo() },
         { type: "separator" },
-        { role: "cut" },
-        { role: "copy" },
-        { role: "paste" },
-        { role: "selectAll" },
+        { label: "Cut", click: () => getWindow()?.webContents.cut() },
+        { label: "Copy", click: () => getWindow()?.webContents.copy() },
+        { label: "Paste", click: () => getWindow()?.webContents.paste() },
+        { label: "Select All", click: () => getWindow()?.webContents.selectAll() },
       ],
     },
     {
       label: "View",
       submenu: [
-        { role: "reload" },
-        { role: "forceReload" },
+        // Ctrl+R is reverse-history-search in shells; move reload off it.
+        { label: "Reload", click: () => getWindow()?.webContents.reload() },
+        { label: "Force Reload", click: () => getWindow()?.webContents.reloadIgnoringCache() },
         { role: "toggleDevTools" },
         { type: "separator" },
         { role: "resetZoom" },
@@ -106,9 +113,11 @@ export function installAppMenu(getWindow: () => BrowserWindow | null, onCheckFor
     {
       label: "Window",
       submenu: [
-        { role: "minimize" },
+        { label: "Minimize", click: () => getWindow()?.minimize() },
         { role: "zoom" },
-        ...(isMac ? [{ type: "separator" as const }, { role: "front" as const }] : [{ role: "close" as const }]),
+        ...(isMac
+          ? [{ type: "separator" as const }, { role: "front" as const }]
+          : [{ label: "Close", click: () => getWindow()?.close() }]),
       ],
     },
     {

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, Notification, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, Notification, shell } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import type {
   ChannelCredentialWrite,
@@ -255,17 +255,28 @@ export function installDesktopIpc(options: DesktopIpcOptions): void {
     BrowserWindow.fromWebContents(event.sender)?.close();
   });
 
+  ipcMain.handle("desktop:clipboard-read-text", () => clipboard.readText());
+  ipcMain.handle("desktop:clipboard-write-text", (_event, text: string) => {
+    clipboard.writeText(typeof text === "string" ? text : "");
+  });
+
   // In-app embedded terminal (xterm.js ⇄ node-pty via IPC). Sessions are
   // bound to the creating webContents and cleaned up when it is destroyed.
   ipcMain.handle("desktop:terminal-create", async (event, payload: { cwd?: string; cols?: number; rows?: number }) => {
     const cwd = payload?.cwd;
+    console.log(
+      "[terminal-main] create request",
+      JSON.stringify({ cwd: cwd ?? null, cols: payload?.cols ?? null, rows: payload?.rows ?? null }),
+    );
     if (typeof cwd !== "string" || !cwd.trim() || !path.isAbsolute(cwd)) {
       throw new Error("Invalid terminal directory");
     }
     const sender = event.sender;
+    const t0 = Date.now();
     const id = await terminalManager.spawn(cwd, payload?.cols ?? 80, payload?.rows ?? 24, (sid, terminalEvent) => {
       if (!sender.isDestroyed()) sender.send("terminal:event", { id: sid, ...terminalEvent });
     });
+    console.log("[terminal-main] create resolved", JSON.stringify({ id, tookMs: Date.now() - t0 }));
     sender.once("destroyed", () => terminalManager.kill(id));
     return { id };
   });
@@ -283,6 +294,11 @@ export function installDesktopIpc(options: DesktopIpcOptions): void {
 }
 
 const terminalManager = new TerminalManager();
+
+/** Preload node-pty so the first terminal opens instantly (called at startup). */
+export function warmupDesktopTerminals(): void {
+  terminalManager.warmup();
+}
 
 /** Kill every in-app terminal session (app quit / window teardown). */
 export function disposeDesktopTerminals(): void {

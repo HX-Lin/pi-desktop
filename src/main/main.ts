@@ -14,7 +14,7 @@ import { acquireSingleInstanceLock } from "./single-instance";
 import { loadUiState } from "./window-state";
 import { createTray, destroyTray, setTrayRunningCount } from "./tray";
 import { createMainWindow } from "./window";
-import { installDesktopIpc, disposeDesktopTerminals } from "./ipc";
+import { installDesktopIpc, disposeDesktopTerminals, warmupDesktopTerminals } from "./ipc";
 import { createCredentialRequestHandler, CredentialVault } from "./credential-vault";
 import { createProductionUpdateAdapter, isProductionUpdatePlatformEnabled } from "./update-adapter";
 import { createUpdateManager, redactUpdateError, type UpdateManager } from "./update-manager";
@@ -333,6 +333,9 @@ void app.whenReady().then(async () => {
   // Always register app:// so we can load the built renderer without Vite
   // (npm start after build, or dev fallback when VITE_DEV_SERVER_URL is unset).
   handleAppProtocol(rendererRootPath());
+
+  // Preload node-pty so the first in-app terminal opens instantly.
+  warmupDesktopTerminals();
 
   installDesktopIpc({
     getHostManager: () => hostManager,

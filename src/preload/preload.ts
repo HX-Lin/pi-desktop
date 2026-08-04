@@ -85,6 +85,8 @@ const bridge: PiBridge = {
   },
   openExternal: (url) => ipcRenderer.invoke("desktop:open-external", url),
   showItemInFolder: (fsPath) => ipcRenderer.invoke("desktop:show-item-in-folder", fsPath),
+  readClipboardText: () => ipcRenderer.invoke("desktop:clipboard-read-text"),
+  writeClipboardText: (text) => ipcRenderer.invoke("desktop:clipboard-write-text", text),
   terminal: {
     create: (cwd, cols, rows) => ipcRenderer.invoke("desktop:terminal-create", { cwd, cols, rows }),
     write: (id, data) => ipcRenderer.invoke("desktop:terminal-write", { id, data }),

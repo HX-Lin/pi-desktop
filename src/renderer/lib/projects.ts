@@ -9,6 +9,8 @@ export interface OpenProject {
   root: string;
   /** Last cwd (worktree / subdirectory) used inside this project, if any. */
   lastCwd: string | null;
+  /** Optional user-assigned display name (falls back to the folder name). */
+  name?: string;
 }
 
 export const OPEN_PROJECTS_STORAGE_KEY = "pi-desktop:open-projects";
@@ -25,7 +27,8 @@ export function loadOpenProjects(storage: Storage): OpenProject[] {
         const root = (item as OpenProject).root;
         if (!root) continue;
         const lastCwd = typeof (item as OpenProject).lastCwd === "string" ? (item as OpenProject).lastCwd : null;
-        projects.push({ root, lastCwd });
+        const name = typeof (item as OpenProject).name === "string" ? (item as OpenProject).name : undefined;
+        projects.push({ root, lastCwd, ...(name ? { name } : {}) });
       }
     }
     return projects;
@@ -40,4 +43,17 @@ export function saveOpenProjects(storage: Storage, projects: OpenProject[]): voi
   } catch {
     // ignore storage quota / privacy-mode errors
   }
+}
+
+/** Folder-name fallback without importing renderer helpers. */
+function folderName(root: string): string {
+  const trimmed = root.replace(/[\\/]+$/, "");
+  const parts = trimmed.split(/[\\/]/);
+  return parts[parts.length - 1] || trimmed;
+}
+
+/** User-assigned name if set, otherwise the project folder name. */
+export function getProjectDisplayName(projects: OpenProject[], root: string): string {
+  const name = projects.find((p) => p.root === root)?.name?.trim();
+  return name || folderName(root) || root;
 }

@@ -86,6 +86,11 @@ export class TerminalManager {
     return this.spawnerPromise;
   }
 
+  /** Kick off the node-pty load without waiting (app-start warmup). */
+  warmup(): void {
+    void this.getSpawner();
+  }
+
   async spawn(
     cwd: string,
     cols: number,

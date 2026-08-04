@@ -1,7 +1,15 @@
-import { useEffect, useId, useRef, useState } from "react";
-import { useTheme } from "@/hooks/useTheme";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useTheme, type Theme } from "@/hooks/useTheme";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useI18n, type AppLanguage } from "@/i18n";
+import {
+  loadNiriSettings,
+  saveNiriSettings,
+  applyNiriSettings,
+  NIRI_OPACITY_MIN,
+  NIRI_OPACITY_MAX,
+  type NiriSettings,
+} from "@/lib/niri-settings";
 import { ModelsConfig } from "./ModelsConfig";
 import { SkillsConfig } from "./SkillsConfig";
 import { PluginsConfig } from "./PluginsConfig";
@@ -36,7 +44,7 @@ export function SettingsConfig({
   onChannelsChanged,
 }: SettingsConfigProps) {
   const isMobile = useIsMobile();
-  const { isDark, toggleTheme } = useTheme();
+  const { theme, setTheme } = useTheme();
   const { language, setLanguage, t } = useI18n();
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -249,10 +257,8 @@ export function SettingsConfig({
             <GeneralSettings
               language={language}
               onLanguageChange={setLanguage}
-              isDark={isDark}
-              onThemeChange={(nextDark) => {
-                if (nextDark !== isDark) toggleTheme();
-              }}
+              theme={theme}
+              onThemeChange={setTheme}
             />
           )}
           {activeTab === "models" && <ModelsConfig embedded onClose={() => undefined} onChanged={onModelsChanged} />}
@@ -871,19 +877,42 @@ function AboutRow({ label, value, last = false }: { label: string; value: React.
 function GeneralSettings({
   language,
   onLanguageChange,
-  isDark,
+  theme,
   onThemeChange,
 }: {
   language: AppLanguage;
   onLanguageChange: (language: AppLanguage) => void;
-  isDark: boolean;
-  onThemeChange: (dark: boolean) => void;
+  theme: Theme;
+  onThemeChange: (theme: Theme) => void;
 }) {
   const { t } = useI18n();
   const [backgroundMode, setBackgroundMode] = useState(true);
   const languageControlId = useId();
   const backgroundModeControlId = useId();
   const themeControlId = useId();
+  const niriOpacityControlId = useId();
+  const niriGlowControlId = useId();
+  // niri theme tuning (opacity + glow), only meaningful on Linux.
+  const [niriSettings, setNiriSettings] = useState<NiriSettings>(() => loadNiriSettings());
+  useEffect(() => {
+    applyNiriSettings(loadNiriSettings());
+  }, []);
+  const handleNiriOpacity = useCallback((value: number) => {
+    // Functional update avoids re-reading localStorage mid-drag; the applied
+    // value always equals the slider position (no drift/jumps).
+    setNiriSettings((prev) => {
+      const next = { ...prev, opacity: value };
+      saveNiriSettings(next);
+      return next;
+    });
+  }, []);
+  const handleNiriGlow = useCallback((glow: boolean) => {
+    setNiriSettings((prev) => {
+      const next = { ...prev, glow };
+      saveNiriSettings(next);
+      return next;
+    });
+  }, []);
   useEffect(() => {
     void window.piBridge.getUiState().then((state) => setBackgroundMode(state.backgroundMode !== false));
   }, []);
@@ -953,14 +982,54 @@ function GeneralSettings({
         <SettingRow label={t("theme", "Theme")} controlId={themeControlId}>
           <select
             id={themeControlId}
-            value={isDark ? "dark" : "light"}
-            onChange={(event) => onThemeChange(event.target.value === "dark")}
+            value={theme}
+            onChange={(event) => onThemeChange(event.target.value as Theme)}
             style={selectStyle}
           >
             <option value="light">{t("light", "Light")}</option>
             <option value="dark">{t("dark", "Dark")}</option>
+            <option value="niri" disabled={window.piBridge?.platform !== "linux"}>
+              {t("themeNiri", "niri (translucent)")}
+              {window.piBridge?.platform !== "linux" ? " — Linux only" : ""}
+            </option>
           </select>
         </SettingRow>
+        {theme === "niri" && (
+          <>
+            <SettingRow label={t("niriOpacity", "Background opacity")} controlId={niriOpacityControlId}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <input
+                  id={niriOpacityControlId}
+                  type="range"
+                  min={Math.round(NIRI_OPACITY_MIN * 100)}
+                  max={Math.round(NIRI_OPACITY_MAX * 100)}
+                  step={1}
+                  value={Math.round(niriSettings.opacity * 100)}
+                  onChange={(event) => handleNiriOpacity(Number(event.target.value) / 100)}
+                  style={{ width: 160, accentColor: "var(--accent)", cursor: "pointer" }}
+                  aria-label={t("niriOpacity", "Background opacity")}
+                />
+                <span style={{ width: 34, fontSize: 12, color: "var(--text-muted)", textAlign: "right" }}>
+                  {Math.round(niriSettings.opacity * 100)}%
+                </span>
+              </div>
+            </SettingRow>
+            <SettingRow label={t("niriGlow", "Ambient glow")} controlId={niriGlowControlId}>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                <input
+                  id={niriGlowControlId}
+                  type="checkbox"
+                  checked={niriSettings.glow}
+                  onChange={(event) => handleNiriGlow(event.target.checked)}
+                  style={{ width: 16, height: 16, margin: 0, accentColor: "var(--accent)", cursor: "pointer" }}
+                />
+                <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                  {t("niriGlowDescription", "Corner accent glow behind panels")}
+                </span>
+              </label>
+            </SettingRow>
+          </>
+        )}
       </section>
     </div>
   );

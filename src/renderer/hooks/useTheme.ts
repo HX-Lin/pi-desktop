@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 
-type Theme = "light" | "dark";
+export type Theme = "light" | "dark" | "niri";
 
 const listeners = new Set<() => void>();
 
@@ -13,7 +13,9 @@ function subscribe(cb: () => void): () => void {
 
 function getSnapshot(): Theme {
   if (typeof document === "undefined") return "light";
-  return document.documentElement.classList.contains("dark") ? "dark" : "light";
+  const el = document.documentElement;
+  if (el.classList.contains("niri")) return "niri";
+  return el.classList.contains("dark") ? "dark" : "light";
 }
 
 function getServerSnapshot(): Theme {
@@ -26,10 +28,12 @@ function systemPrefersDark(): boolean {
 
 type ToggleOrigin = { x: number; y: number };
 
+const STORED_THEMES = new Set(["light", "dark", "niri"]);
+
 export function useTheme() {
   const theme = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 
-  // Follow OS theme when user has not forced a preference (or chose system)
+  // Follow OS theme when the user has not forced a preference (or chose system)
   useEffect(() => {
     const storedTheme = (): string | null => {
       try {
@@ -38,7 +42,7 @@ export function useTheme() {
         return null;
       }
     };
-    if (storedTheme() === "light" || storedTheme() === "dark") return;
+    if (STORED_THEMES.has(storedTheme() ?? "")) return;
 
     const applySystem = () => {
       // Re-check on every invocation: toggling the theme flips Electron's
@@ -46,9 +50,10 @@ export function useTheme() {
       // this guard the listener resets themeSource to "system" and reverts
       // the toggle (feedback loop).
       const stored = storedTheme();
-      if (stored === "light" || stored === "dark") return;
+      if (STORED_THEMES.has(stored ?? "")) return;
       const dark = systemPrefersDark();
       document.documentElement.classList.toggle("dark", dark);
+      document.documentElement.classList.remove("niri");
       listeners.forEach((cb) => cb());
       void window.piBridge?.setThemeSource?.("system");
     };
@@ -59,21 +64,18 @@ export function useTheme() {
     return () => mq?.removeEventListener?.("change", onChange);
   }, []);
 
-  const toggleTheme = useCallback((origin?: ToggleOrigin) => {
-    const next: Theme = getSnapshot() === "dark" ? "light" : "dark";
-
+  const applyTheme = useCallback((next: Theme, origin?: ToggleOrigin) => {
     const apply = () => {
-      if (next === "dark") {
-        document.documentElement.classList.add("dark");
-      } else {
-        document.documentElement.classList.remove("dark");
-      }
+      const el = document.documentElement;
+      el.classList.toggle("dark", next !== "light");
+      el.classList.toggle("niri", next === "niri");
       try {
         localStorage.setItem("pi-theme", next);
       } catch {
         // ignore storage errors (private mode, quota, etc.)
       }
-      void window.piBridge?.setThemeSource?.(next);
+      // nativeTheme has no "niri"; drive system UI as dark.
+      void window.piBridge?.setThemeSource?.(next === "light" ? "light" : "dark");
       listeners.forEach((cb) => cb());
     };
 
@@ -108,5 +110,20 @@ export function useTheme() {
       });
   }, []);
 
-  return { theme, toggleTheme, isDark: theme === "dark" };
+  const setTheme = useCallback(
+    (next: Theme) => {
+      if (next !== getSnapshot()) applyTheme(next);
+    },
+    [applyTheme],
+  );
+
+  const toggleTheme = useCallback(
+    (origin?: ToggleOrigin) => {
+      const next: Theme = getSnapshot() === "light" ? "dark" : "light";
+      applyTheme(next, origin);
+    },
+    [applyTheme],
+  );
+
+  return { theme, setTheme, toggleTheme, isDark: theme !== "light" };
 }

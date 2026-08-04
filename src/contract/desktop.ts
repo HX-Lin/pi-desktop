@@ -108,6 +108,8 @@ export interface PiBridge {
   requestHostPort: () => void;
   openExternal: (url: string) => Promise<void>;
   showItemInFolder: (fsPath: string) => Promise<void>;
+  readClipboardText: () => Promise<string>;
+  writeClipboardText: (text: string) => Promise<void>;
   terminal: DesktopTerminalBridge;
   windowControl: DesktopWindowControlBridge;
   selectDirectory: () => Promise<string | null>;
