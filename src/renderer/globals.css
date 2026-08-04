@@ -22,37 +22,39 @@
   --font-sans-font: var(--font-sans);
 }
 
-/* Warm paper + orange accent design system (from design.html) */
+/* Warm paper + orange accent design system (from design.html).
+ * Backgrounds are translucent so a transparent Linux window lets the desktop
+ * wallpaper glow through while text stays opaque and readable. */
 :root {
   --font-inter: "Inter", system-ui, sans-serif;
   --font-noto-mono: "Noto Sans Mono", ui-monospace, monospace;
-  --bg: #f7f6f3;
-  --bg-panel: #fcfbf9;
-  --bg-hover: #f0eeea;
-  --bg-selected: #fff0e6;
-  --border: #e4e1da;
-  --text: #1c1a17;
-  --text-muted: #57534a;
-  --text-dim: #746f66;
+  --bg: rgba(248, 247, 244, 0.86);
+  --bg-panel: rgba(253, 252, 250, 0.74);
+  --bg-hover: rgba(0, 0, 0, 0.05);
+  --bg-selected: rgba(194, 65, 12, 0.12);
+  --border: rgba(28, 26, 23, 0.12);
+  --text: #1b1b1f;
+  --text-muted: #57575f;
+  --text-dim: #6f6f78;
   --accent: #c2410c;
   --accent-hover: #9a3412;
-  --user-bg: #1c1a17;
+  --user-bg: rgba(28, 26, 23, 0.92);
   --user-fg: #faf9f7;
-  --assistant-bg: #ffffff;
-  --tool-bg: #1c1a17;
+  --assistant-bg: rgba(255, 255, 255, 0.72);
+  --tool-bg: rgba(28, 26, 23, 0.92);
   --tool-fg: #c9c5bb;
-  --tool-border: #33302a;
-  --bg-subtle: rgba(28, 26, 23, 0.035);
-  --accent-soft: #fff0e6;
-  --accent-soft-border: #f7d9bd;
+  --tool-border: rgba(28, 26, 23, 0.16);
+  --bg-subtle: rgba(28, 26, 23, 0.04);
+  --accent-soft: rgba(194, 65, 12, 0.1);
+  --accent-soft-border: rgba(194, 65, 12, 0.22);
   --accent-chip-bg: #fbeee0;
   --accent-chip-fg: #8b5e2c;
   --success: #16a34a;
-  --danger: #ef4444;
-  --grid-line: #ece9e2;
+  --danger: #dc2626;
+  --grid-line: rgba(28, 26, 23, 0.07);
   --selection: #fed7aa;
-  --thinking-bg: #fbfaf8;
-  --thinking-border: #d6d3cd;
+  --thinking-bg: rgba(251, 250, 248, 0.8);
+  --thinking-border: rgba(28, 26, 23, 0.12);
   --font-size-caption: 12px;
   --font-size-control: 13px;
   --font-size-body: 14px;
@@ -61,33 +63,33 @@
 }
 
 html.dark {
-  --bg: #141210;
-  --bg-panel: #1c1a17;
-  --bg-hover: #26231f;
-  --bg-selected: #3a2a1f;
-  --border: #33302a;
-  --text: #faf9f7;
-  --text-muted: #a19d92;
-  --text-dim: #8f8a81;
-  --accent: #f97316;
-  --accent-hover: #fb923c;
-  --user-bg: #2a2620;
-  --user-fg: #faf9f7;
-  --assistant-bg: #1c1a17;
-  --tool-bg: #0f0e0c;
-  --tool-fg: #c9c5bb;
-  --tool-border: #33302a;
-  --bg-subtle: rgba(255, 255, 255, 0.04);
-  --accent-soft: rgba(234, 88, 12, 0.16);
-  --accent-soft-border: rgba(234, 88, 12, 0.38);
-  --accent-chip-bg: rgba(234, 88, 12, 0.18);
-  --accent-chip-fg: #e8b07a;
-  --success: #22c55e;
+  --bg: rgba(17, 19, 26, 0.8);
+  --bg-panel: rgba(26, 29, 39, 0.68);
+  --bg-hover: rgba(255, 255, 255, 0.06);
+  --bg-selected: rgba(251, 146, 60, 0.2);
+  --border: rgba(255, 255, 255, 0.1);
+  --text: #f2f3f7;
+  --text-muted: #b4b8c4;
+  --text-dim: #9aa0af;
+  --accent: #fb923c;
+  --accent-hover: #fdba74;
+  --user-bg: rgba(42, 46, 58, 0.92);
+  --user-fg: #f5f6fa;
+  --assistant-bg: rgba(26, 29, 39, 0.62);
+  --tool-bg: rgba(10, 12, 17, 0.9);
+  --tool-fg: #c9cdd8;
+  --tool-border: rgba(255, 255, 255, 0.12);
+  --bg-subtle: rgba(255, 255, 255, 0.05);
+  --accent-soft: rgba(251, 146, 60, 0.14);
+  --accent-soft-border: rgba(251, 146, 60, 0.32);
+  --accent-chip-bg: rgba(251, 146, 60, 0.18);
+  --accent-chip-fg: #f0c39a;
+  --success: #4ade80;
   --danger: #f87171;
-  --grid-line: #2a2620;
-  --selection: rgba(234, 88, 12, 0.38);
-  --thinking-bg: #1a1815;
-  --thinking-border: #4a453c;
+  --grid-line: rgba(255, 255, 255, 0.06);
+  --selection: rgba(251, 146, 60, 0.35);
+  --thinking-bg: rgba(20, 23, 31, 0.6);
+  --thinking-border: rgba(255, 255, 255, 0.1);
 }
 
 /* Theme toggle: circular wipe via View Transitions API.
@@ -114,7 +116,8 @@ body {
   height: 100%;
   margin: 0;
   padding: 0;
-  background: var(--bg);
+  /* Transparent so the transparent Linux window (niri etc.) shows wallpaper. */
+  background: transparent;
   color: var(--text);
   font-family: var(--font-sans);
   font-size: 14px;
@@ -123,6 +126,25 @@ body {
 
 body {
   height: 100dvh;
+}
+
+/* Ambient accent glow + translucent base over the transparent window so
+   wallpaper glows through while text stays opaque and high-contrast. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: var(--bg);
+}
+
+/* On Linux the window is transparent (niri etc.): drop the opaque base so
+   the wallpaper shows, keep only a soft accent glow. */
+html.transparent-window body::before {
+  background:
+    radial-gradient(900px 620px at 82% -12%, var(--accent-soft) 0%, transparent 58%),
+    radial-gradient(760px 560px at -8% 108%, var(--accent-soft) 0%, transparent 55%);
 }
 
 #root {
@@ -209,11 +231,11 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #d6d3cd;
+  background: rgba(28, 26, 23, 0.25);
   border-radius: 4px;
 }
 html.dark ::-webkit-scrollbar-thumb {
-  background: #4a453c;
+  background: rgba(255, 255, 255, 0.2);
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-dim);

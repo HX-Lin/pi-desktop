@@ -13,6 +13,8 @@ import { SessionSidebar } from "./SessionSidebar";
 import { ChatWindow } from "./ChatWindow";
 import { FileExplorer } from "./FileExplorer";
 import { FileViewer } from "./FileViewer";
+import { TerminalPanel } from "./TerminalPanel";
+import { WindowControls } from "./WindowControls";
 import { TabBar, type Tab } from "./TabBar";
 import { SettingsConfig, type SettingsTab } from "./SettingsConfig";
 import { QuickChannelBinding } from "./channels/QuickChannelBinding";
@@ -22,6 +24,7 @@ import { useI18n } from "@/i18n";
 import { copyText } from "@/lib/clipboard";
 import { getFileName } from "@/lib/file-paths";
 import { getSessionDisplayTitle } from "@/lib/session-list";
+import { loadOpenProjects, saveOpenProjects, type OpenProject } from "@/lib/projects";
 import { buildAtMentionText } from "@/lib/file-fuzzy";
 import {
   RIGHT_PANEL_DEFAULT_WIDTH,
@@ -41,6 +44,11 @@ import type { ChannelsSnapshot } from "@shared/channel-types";
 
 type SessionCopyField = "file" | "id";
 const EXPLORER_TAB_ID = "explorer";
+const TERMINAL_TAB_PREFIX = "terminal-";
+
+function isTerminalTabId(id: string | null): boolean {
+  return typeof id === "string" && id.startsWith(TERMINAL_TAB_PREFIX);
+}
 const EMPTY_CHANNELS: ChannelsSnapshot = { accounts: [], statuses: [], pairings: [], bindings: [], activities: [] };
 
 function initialRightPanelPreferredWidth(): number {
@@ -189,6 +197,9 @@ export function AppShell() {
 
   // Right panel — file tabs only
   const [fileTabs, setFileTabs] = useState<Tab[]>([]);
+  // Embedded terminals are dynamic tabs created via the "+" button.
+  const [terminalTabs, setTerminalTabs] = useState<{ id: string; label: string; cwd: string }[]>([]);
+  const terminalCounterRef = useRef(0);
   const [activeFileTabId, setActiveFileTabId] = useState<string | null>(EXPLORER_TAB_ID);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
   const [rightPanelBounds, setRightPanelBounds] = useState(() =>
@@ -310,10 +321,111 @@ export function AppShell() {
 
   const [initialSessionId] = useState<string | null>(() => searchParams.get("session"));
   const [activeCwd, setActiveCwd] = useState<string | null>(null);
+  // Multi-project: one window can pin several folder projects. Only the pinned
+  // roots are persisted; each project's last view state (session / cwd) is kept
+  // in memory so switching projects preserves what was open.
+  const [openProjects, setOpenProjects] = useState<OpenProject[]>(() => {
+    try {
+      return loadOpenProjects(window.localStorage);
+    } catch {
+      return [];
+    }
+  });
+  const [activeProjectRoot, setActiveProjectRoot] = useState<string | null>(null);
+  const projectViewRef = useRef<
+    Record<string, { session: SessionInfo | null; newSessionCwd: string | null; cwd: string | null }>
+  >({});
+  const initialProjectRestoredRef = useRef(false);
   // True once the initial ?session= URL param has been resolved (or confirmed absent)
   const [initialSessionRestored, setInitialSessionRestored] = useState<boolean>(() => !searchParams.get("session"));
   // Suppresses sessionKey bump in handleCwdChange during the initial URL restore
   const suppressCwdBumpRef = useRef(false);
+
+  // Persist the pinned project list across restarts.
+  useEffect(() => {
+    try {
+      saveOpenProjects(window.localStorage, openProjects);
+    } catch {
+      // Storage can become unavailable after startup; keep the in-memory list.
+    }
+  }, [openProjects]);
+
+  // Keep the active project's view state (open session / new-session cwd / cwd)
+  // so switching projects later can restore exactly what was open.
+  useEffect(() => {
+    if (!activeProjectRoot) return;
+    projectViewRef.current[activeProjectRoot] = { session: selectedSession, newSessionCwd, cwd: activeCwd };
+  }, [activeProjectRoot, selectedSession, newSessionCwd, activeCwd]);
+
+  // Restore the last pinned project on startup (before the sidebar's own
+  // most-recent-project auto-pick kicks in). A ?session= URL restore takes
+  // priority — the sidebar restores that session and its project is activated
+  // via handleCwdChange's suppress branch.
+  useEffect(() => {
+    if (initialProjectRestoredRef.current) return;
+    initialProjectRestoredRef.current = true;
+    if (initialSessionId) return;
+    if (openProjects.length === 0) return;
+    const first = openProjects[0];
+    setActiveProjectRoot(first.root);
+    setActiveCwd(first.lastCwd ?? first.root);
+  }, [openProjects, initialSessionId]);
+
+  const saveProjectView = useCallback(
+    (root: string | null) => {
+      if (!root) return;
+      projectViewRef.current[root] = { session: selectedSession, newSessionCwd, cwd: activeCwd };
+    },
+    [selectedSession, newSessionCwd, activeCwd],
+  );
+
+  const activateProject = useCallback(
+    (root: string) => {
+      if (root === activeProjectRoot) return;
+      saveProjectView(activeProjectRoot);
+      const saved = projectViewRef.current[root];
+      const entry = openProjects.find((p) => p.root === root);
+      setActiveProjectRoot(root);
+      setActiveCwd(saved?.cwd ?? entry?.lastCwd ?? root);
+      setSelectedSession(saved?.session ?? null);
+      setNewSessionCwd(saved?.newSessionCwd ?? null);
+      setSessionKey((k) => k + 1);
+      setActiveTopPanel(null);
+      if (isMobile) setSidebarOpen(false);
+      router.replace("/", { scroll: false });
+    },
+    [activeProjectRoot, isMobile, openProjects, router, saveProjectView],
+  );
+
+  const handleRemoveProject = useCallback(
+    (root: string) => {
+      setOpenProjects((prev) => prev.filter((p) => p.root !== root));
+      delete projectViewRef.current[root];
+      if (root !== activeProjectRoot) return;
+      const remaining = openProjects.filter((p) => p.root !== root);
+      if (remaining.length === 0) {
+        setActiveProjectRoot(null);
+        setActiveCwd(null);
+        setSelectedSession(null);
+        setNewSessionCwd(null);
+        setSessionKey((k) => k + 1);
+        setActiveTopPanel(null);
+        router.replace("/", { scroll: false });
+        return;
+      }
+      const next = remaining[0];
+      const saved = projectViewRef.current[next.root];
+      setActiveProjectRoot(next.root);
+      setActiveCwd(saved?.cwd ?? next.lastCwd ?? next.root);
+      setSelectedSession(saved?.session ?? null);
+      setNewSessionCwd(saved?.newSessionCwd ?? null);
+      setSessionKey((k) => k + 1);
+      setActiveTopPanel(null);
+      if (isMobile) setSidebarOpen(false);
+      router.replace("/", { scroll: false });
+    },
+    [activeProjectRoot, isMobile, openProjects, router],
+  );
 
   // Deep link + menu actions from Electron main
   useEffect(() => {
@@ -323,6 +435,14 @@ export function AppShell() {
           const { sessions } = await listSessions();
           const found = sessions.find((s) => s.id === sessionId);
           if (found) {
+            const root = found.projectRoot ?? found.cwd;
+            saveProjectView(activeProjectRoot);
+            setOpenProjects((prev) => {
+              const exists = prev.some((p) => p.root === root);
+              if (exists) return prev.map((p) => (p.root === root ? { ...p, lastCwd: found.cwd } : p));
+              return [...prev, { root, lastCwd: found.cwd }];
+            });
+            setActiveProjectRoot(root);
             setNewSessionCwd(null);
             setSelectedSession(found as SessionInfo);
             setSessionKey((k) => k + 1);
@@ -371,21 +491,53 @@ export function AppShell() {
       offShowUpdate?.();
       offSwitch?.();
     };
-  }, [activeCwd, router]);
+  }, [activeCwd, activeProjectRoot, router, saveProjectView]);
 
   const handleCwdChange = useCallback(
     (cwd: string | null, projectRoot?: string | null) => {
       setActiveCwd(cwd);
       // Skip if cwd is null (initial mount) or during the initial URL restore.
       if (!cwd) return;
+      const newProject = projectRoot ?? cwd;
       if (suppressCwdBumpRef.current) {
         suppressCwdBumpRef.current = false;
+        // URL session restore: the target session is already selected by
+        // handleSelectSession, but the project identity must still follow it.
+        if (activeProjectRoot !== newProject) {
+          saveProjectView(activeProjectRoot);
+          setOpenProjects((prev) => {
+            const exists = prev.some((p) => p.root === newProject);
+            if (exists) return prev.map((p) => (p.root === newProject ? { ...p, lastCwd: cwd } : p));
+            return [...prev, { root: newProject, lastCwd: cwd }];
+          });
+          setActiveProjectRoot(newProject);
+          setActiveTopPanel(null);
+          router.replace("/", { scroll: false });
+        }
+        return;
+      }
+      if (activeProjectRoot !== newProject) {
+        // Selecting a different project: pin it (auto-add) and switch to it,
+        // restoring whatever view state that project last had. Each project
+        // keeps its own open session, so conversations are never closed.
+        saveProjectView(activeProjectRoot);
+        setOpenProjects((prev) => {
+          const exists = prev.some((p) => p.root === newProject);
+          if (exists) return prev.map((p) => (p.root === newProject ? { ...p, lastCwd: cwd } : p));
+          return [...prev, { root: newProject, lastCwd: cwd }];
+        });
+        const saved = projectViewRef.current[newProject];
+        setActiveProjectRoot(newProject);
+        setSelectedSession(saved?.session ?? null);
+        setNewSessionCwd(saved?.newSessionCwd ?? null);
+        setSessionKey((k) => k + 1);
+        setActiveTopPanel(null);
+        router.replace("/", { scroll: false });
         return;
       }
       // Worktrees of one repo share a project root. Moving the effective cwd
       // within the same project (e.g. switching worktree, or clicking a session
       // that lives in another worktree) must not close the open session.
-      const newProject = projectRoot ?? cwd;
       if (selectedSession && (selectedSession.projectRoot ?? selectedSession.cwd) === newProject) {
         return;
       }
@@ -400,7 +552,7 @@ export function AppShell() {
       setActiveTopPanel(null);
       router.replace("/", { scroll: false });
     },
-    [router, selectedSession],
+    [activeProjectRoot, router, saveProjectView, selectedSession],
   );
 
   const handleSelectSession = useCallback(
@@ -528,7 +680,7 @@ export function AppShell() {
     (tabId: string) => {
       setFileTabs((prev) => {
         const next = prev.filter((t) => t.id !== tabId);
-        if (next.length === 0) setRightPanelOpen(false);
+        if (next.length === 0 && terminalTabs.length === 0) setRightPanelOpen(false);
         return next;
       });
       setActiveFileTabId((cur) => {
@@ -537,8 +689,36 @@ export function AppShell() {
         return remaining.length > 0 ? remaining[remaining.length - 1].id : EXPLORER_TAB_ID;
       });
     },
-    [fileTabs],
+    [fileTabs, terminalTabs.length],
   );
+
+  const handleCloseTerminalTab = useCallback((tabId: string) => {
+    setTerminalTabs((prev) => prev.filter((t) => t.id !== tabId));
+    setActiveFileTabId((cur) => {
+      if (cur !== tabId) return cur;
+      return EXPLORER_TAB_ID;
+    });
+  }, []);
+
+  // Close a file tab or an embedded terminal tab depending on its id.
+  const handleCloseAnyTab = useCallback(
+    (tabId: string) => {
+      if (isTerminalTabId(tabId)) handleCloseTerminalTab(tabId);
+      else handleCloseFileTab(tabId);
+    },
+    [handleCloseFileTab, handleCloseTerminalTab],
+  );
+
+  // Open a new embedded terminal in the current project directory.
+  const handleAddTerminal = useCallback(() => {
+    const cwd = activeCwd ?? selectedSession?.cwd ?? newSessionCwd;
+    if (!cwd) return;
+    terminalCounterRef.current += 1;
+    const id = `${TERMINAL_TAB_PREFIX}${terminalCounterRef.current}`;
+    const label = `${t("terminalLabel", "Terminal")} ${terminalCounterRef.current}`;
+    setTerminalTabs((prev) => [...prev, { id, label, cwd }]);
+    setActiveFileTabId(id);
+  }, [activeCwd, selectedSession?.cwd, newSessionCwd, t]);
 
   // Show chat area if a session is selected, or if we have a cwd to start a new session in
   const effectiveNewSessionCwd = newSessionCwd ?? (selectedSession === null && activeCwd ? activeCwd : null);
@@ -548,6 +728,20 @@ export function AppShell() {
 
   const activeFileTab = fileTabs.find((t) => t.id === activeFileTabId) ?? null;
   const explorerCwd = activeCwd ?? selectedSession?.cwd ?? newSessionCwd;
+  // Custom titlebar controls are shown on Linux/Windows (native decorations may
+  // be absent); macOS keeps its native traffic lights.
+  const showWindowControls = window.piBridge?.platform !== "darwin";
+  const windowControlsWidth = showWindowControls ? 142 : 0;
+  // Merge embedded terminal tabs with file tabs for the shared TabBar.
+  const allTabs: Tab[] = [
+    ...terminalTabs.map((terminalTab) => ({
+      id: terminalTab.id,
+      label: terminalTab.label,
+      filePath: terminalTab.cwd,
+      kind: "terminal" as const,
+    })),
+    ...fileTabs,
+  ];
 
   useEffect(() => {
     if (!activeCwd || isMobile) return;
@@ -564,8 +758,12 @@ export function AppShell() {
         onInitialRestoreDone={handleInitialRestoreDone}
         refreshKey={refreshKey}
         onSessionDeleted={handleSessionDeleted}
-        selectedCwd={selectedSession?.cwd ?? newSessionCwd ?? null}
+        selectedCwd={selectedSession?.cwd ?? newSessionCwd ?? activeCwd ?? null}
         onCwdChange={handleCwdChange}
+        openProjects={openProjects}
+        activeProjectRoot={activeProjectRoot}
+        onActivateProject={activateProject}
+        onRemoveProject={handleRemoveProject}
       />
       <div style={{ padding: "8px", flexShrink: 0 }}>
         <button
@@ -690,7 +888,7 @@ export function AppShell() {
         }
       }
     `}</style>
-      <div style={{ display: "flex", height: "100dvh", overflow: "hidden", background: "var(--bg)" }}>
+      <div style={{ display: "flex", height: "100dvh", overflow: "hidden", background: "transparent" }}>
         {/* Mobile overlay backdrop */}
         <div
           className={`sidebar-overlay-backdrop${mobileSidebarReady ? "" : " sidebar-mobile-pending"}`}
@@ -743,6 +941,7 @@ export function AppShell() {
               background: "var(--bg-panel)",
               position: "relative",
               zIndex: 2,
+              paddingRight: showWindowControls && !rightPanelOpen ? windowControlsWidth : 0,
             }}
           >
             <button
@@ -869,11 +1068,15 @@ export function AppShell() {
                 </svg>
               )}
             </button>
-            {selectedSession && !isMobile && (
+            {!isMobile && (
               <div
                 role="heading"
                 aria-level={1}
-                title={getSessionDisplayTitle(selectedSession, 240)}
+                title={
+                  selectedSession
+                    ? getSessionDisplayTitle(selectedSession, 240)
+                    : (activeCwd ?? activeProjectRoot ?? undefined)
+                }
                 style={{
                   flex: "1 1 auto",
                   minWidth: 0,
@@ -886,7 +1089,7 @@ export function AppShell() {
                   fontWeight: 650,
                 }}
               >
-                {getSessionDisplayTitle(selectedSession)}
+                {selectedSession ? getSessionDisplayTitle(selectedSession) : (activeCwd ?? activeProjectRoot ?? "")}
               </div>
             )}
             {selectedSession && (
@@ -1382,7 +1585,7 @@ export function AppShell() {
               background: "var(--bg-panel)",
               borderBottom: "1px solid var(--border)",
               height: 36,
-              paddingRight: 36,
+              paddingRight: 36 + windowControlsWidth,
               boxSizing: "border-box",
             }}
           >
@@ -1421,13 +1624,67 @@ export function AppShell() {
               </svg>
               Explorer
             </button>
-            <div style={{ flex: 1, overflow: "hidden" }}>
-              <TabBar
-                tabs={fileTabs}
-                activeTabId={activeFileTabId ?? ""}
-                onSelectTab={setActiveFileTabId}
-                onCloseTab={handleCloseFileTab}
-              />
+            <div style={{ flex: 1, overflow: "hidden", display: "flex", alignItems: "center", minWidth: 0 }}>
+              <div style={{ flex: 1, overflow: "hidden", minWidth: 0 }}>
+                <TabBar
+                  tabs={allTabs}
+                  activeTabId={activeFileTabId ?? ""}
+                  onSelectTab={setActiveFileTabId}
+                  onCloseTab={handleCloseAnyTab}
+                />
+              </div>
+              <button
+                type="button"
+                onClick={handleAddTerminal}
+                disabled={!explorerCwd}
+                title={
+                  explorerCwd
+                    ? t("newTerminal", "New terminal")
+                    : t("selectProjectPlaceholder", "Select a project to browse files")
+                }
+                aria-label={t("newTerminal", "New terminal")}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 30,
+                  height: 30,
+                  margin: "0 6px 0 4px",
+                  padding: 0,
+                  flexShrink: 0,
+                  background: "none",
+                  border: "none",
+                  borderRadius: 5,
+                  color: explorerCwd ? "var(--text-dim)" : "var(--border)",
+                  cursor: explorerCwd ? "pointer" : "default",
+                  fontSize: 18,
+                  lineHeight: 1,
+                  transition: "color 0.1s",
+                }}
+                onMouseEnter={(e) => {
+                  if (!explorerCwd) return;
+                  e.currentTarget.style.color = "var(--text)";
+                  e.currentTarget.style.background = "var(--bg-hover)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = explorerCwd ? "var(--text-dim)" : "var(--border)";
+                  e.currentTarget.style.background = "none";
+                }}
+              >
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.2"
+                  strokeLinecap="round"
+                  aria-hidden="true"
+                >
+                  <line x1="12" y1="5" x2="12" y2="19" />
+                  <line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+              </button>
             </div>
             {activeFileTabId === EXPLORER_TAB_ID && explorerCwd && (
               <button
@@ -1477,10 +1734,11 @@ export function AppShell() {
             )}
           </div>
 
-          {/* Explorer or file content */}
+          {/* Explorer / Terminal / file content — mounted persistently so a
+              running terminal survives tab switches (display toggled). */}
           <div style={{ flex: 1, overflow: "hidden" }}>
-            {activeFileTabId === EXPLORER_TAB_ID ? (
-              explorerCwd ? (
+            <div style={{ height: "100%", display: activeFileTabId === EXPLORER_TAB_ID ? "block" : "none" }}>
+              {explorerCwd ? (
                 <div style={{ height: "100%", overflowY: "auto", overflowX: "hidden", paddingTop: 4 }}>
                   <FileExplorer
                     cwd={explorerCwd}
@@ -1500,30 +1758,62 @@ export function AppShell() {
                     fontSize: 12,
                   }}
                 >
-                  Select a project to browse files
+                  {t("selectProjectPlaceholder", "Select a project to browse files")}
                 </div>
-              )
-            ) : activeFileTab?.filePath ? (
-              <FileViewer
-                key={activeFileTab.id ?? activeFileTab.filePath}
-                filePath={activeFileTab.filePath}
-                cwd={activeCwd ?? undefined}
-                sourceSessionId={activeFileTab.sourceSessionId}
-              />
-            ) : (
-              <div
-                style={{
-                  height: "100%",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  color: "var(--text-dim)",
-                  fontSize: 12,
-                }}
-              >
-                Select Explorer or open a file
-              </div>
-            )}
+              )}
+            </div>
+            <div style={{ height: "100%", display: isTerminalTabId(activeFileTabId) ? "block" : "none" }}>
+              {terminalTabs.map((terminalTab) => (
+                <div
+                  key={terminalTab.id}
+                  style={{ height: "100%", display: activeFileTabId === terminalTab.id ? "block" : "none" }}
+                >
+                  <TerminalPanel cwd={terminalTab.cwd} active={activeFileTabId === terminalTab.id} />
+                </div>
+              ))}
+              {terminalTabs.length === 0 ? (
+                <div
+                  style={{
+                    height: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    color: "var(--text-dim)",
+                    fontSize: 12,
+                  }}
+                >
+                  {t("newTerminalHint", "Click + to open a terminal")}
+                </div>
+              ) : null}
+            </div>
+            <div
+              style={{
+                height: "100%",
+                display: activeFileTabId === EXPLORER_TAB_ID || isTerminalTabId(activeFileTabId) ? "none" : "block",
+              }}
+            >
+              {activeFileTab?.filePath ? (
+                <FileViewer
+                  key={activeFileTab.id ?? activeFileTab.filePath}
+                  filePath={activeFileTab.filePath}
+                  cwd={activeCwd ?? undefined}
+                  sourceSessionId={activeFileTab.sourceSessionId}
+                />
+              ) : (
+                <div
+                  style={{
+                    height: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    color: "var(--text-dim)",
+                    fontSize: 12,
+                  }}
+                >
+                  Select Explorer or open a file
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -1535,7 +1825,7 @@ export function AppShell() {
         style={{
           position: "fixed",
           top: 0,
-          right: 0,
+          right: windowControlsWidth,
           zIndex: 300,
           display: "flex",
           alignItems: "center",
@@ -1572,6 +1862,7 @@ export function AppShell() {
           <line x1="15" y1="3" x2="15" y2="21" />
         </svg>
       </button>
+      <WindowControls />
       {settingsOpen && (
         <SettingsConfig
           cwd={activeCwd ?? selectedSession?.cwd ?? newSessionCwd ?? null}

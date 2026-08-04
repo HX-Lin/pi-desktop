@@ -26,6 +26,11 @@ files:
 
 asar: true
 
+# node-pty ships a native .node binary that must stay outside the asar blob
+# so Electron can dlopen it at runtime.
+asarUnpack:
+  - "node_modules/node-pty/**"
+
 # Signed runtime catalogs plus the current target's small core search tools.
 # Managed Node/Python/Git archives remain download-on-consent and are never shipped.
 extraResources:

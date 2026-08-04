@@ -14,7 +14,7 @@ import { acquireSingleInstanceLock } from "./single-instance";
 import { loadUiState } from "./window-state";
 import { createTray, destroyTray, setTrayRunningCount } from "./tray";
 import { createMainWindow } from "./window";
-import { installDesktopIpc } from "./ipc";
+import { installDesktopIpc, disposeDesktopTerminals } from "./ipc";
 import { createCredentialRequestHandler, CredentialVault } from "./credential-vault";
 import { createProductionUpdateAdapter, isProductionUpdatePlatformEnabled } from "./update-adapter";
 import { createUpdateManager, redactUpdateError, type UpdateManager } from "./update-manager";
@@ -460,6 +460,7 @@ app.on("before-quit", () => {
   updateManager?.stopAutomaticChecks();
   destroyTray();
   hostManager?.stop();
+  disposeDesktopTerminals();
 });
 
 app.on("window-all-closed", () => {

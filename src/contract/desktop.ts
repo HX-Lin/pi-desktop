@@ -70,6 +70,27 @@ export interface SaveBinaryFileOptions {
   defaultPath?: string;
 }
 
+/** In-app terminal session events pushed from the main process. */
+export type DesktopTerminalEvent =
+  { id: number; type: "data"; data: string } | { id: number; type: "exit"; code: number };
+
+export interface DesktopTerminalBridge {
+  create(cwd: string, cols: number, rows: number): Promise<{ id: number }>;
+  write(id: number, data: string): Promise<void>;
+  resize(id: number, cols: number, rows: number): Promise<void>;
+  kill(id: number): Promise<void>;
+  onEvent(cb: (event: DesktopTerminalEvent) => void): () => void;
+}
+
+/** Custom titlebar window controls for window managers without decorations. */
+export interface DesktopWindowControlBridge {
+  minimize: () => Promise<void>;
+  toggleMaximize: () => Promise<boolean>;
+  isMaximized: () => Promise<boolean>;
+  close: () => Promise<void>;
+  onMaximizedChange: (cb: (maximized: boolean) => void) => () => void;
+}
+
 /** The complete, shared preload surface exposed to the sandboxed renderer. */
 export interface PiBridge {
   platform: NodeJS.Platform;
@@ -87,6 +108,8 @@ export interface PiBridge {
   requestHostPort: () => void;
   openExternal: (url: string) => Promise<void>;
   showItemInFolder: (fsPath: string) => Promise<void>;
+  terminal: DesktopTerminalBridge;
+  windowControl: DesktopWindowControlBridge;
   selectDirectory: () => Promise<string | null>;
   setChannelCredential: (payload: ChannelCredentialWrite) => Promise<void>;
   saveFile: (opts: SaveTextFileOptions) => Promise<string | null>;

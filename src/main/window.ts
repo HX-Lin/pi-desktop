@@ -5,6 +5,10 @@ import { applyWindowBounds, loadUiState, shouldMaximize, trackWindowState } from
 
 const BACKGROUND = "#f7f6f3";
 
+// On Linux we run a transparent window so wallpaper can show through under
+// Wayland compositors (niri etc.). Other platforms keep an opaque frame.
+const TRANSPARENT = process.platform === "linux";
+
 export type CreateMainWindowOptions = {
   isDev: boolean;
   show?: boolean;
@@ -30,7 +34,8 @@ export function createMainWindow(options: CreateMainWindowOptions): BrowserWindo
     minWidth: 900,
     minHeight: 600,
     title: "Pi Agent Desktop",
-    backgroundColor: BACKGROUND,
+    transparent: TRANSPARENT,
+    backgroundColor: TRANSPARENT ? "#00000000" : BACKGROUND,
     show: false,
     webPreferences: {
       preload: resolvePreloadPath(options.runtimeMainDirectory),
@@ -43,6 +48,13 @@ export function createMainWindow(options: CreateMainWindowOptions): BrowserWindo
 
   trackWindowState(win);
   if (shouldMaximize(ui) && !win.isDestroyed()) win.maximize();
+
+  // Notify the renderer so custom titlebar buttons can swap their icons.
+  const notifyMaximized = (maximized: boolean) => {
+    if (!win.isDestroyed()) win.webContents.send("window:maximized-changed", maximized);
+  };
+  win.on("maximize", () => notifyMaximized(true));
+  win.on("unmaximize", () => notifyMaximized(false));
 
   const showWin = () => {
     if (options.show === false) return;

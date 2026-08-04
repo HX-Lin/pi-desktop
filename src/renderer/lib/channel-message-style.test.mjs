@@ -19,7 +19,8 @@ await build({
 const { getUserBubbleColor, USER_BUBBLE_COLORS } = await import(`${pathToFileURL(output).href}?v=${Date.now()}`);
 
 test("user message bubbles use a stable color for each source", () => {
-  assert.equal(getUserBubbleColor(), "#1c1a17");
+  // "local" follows the theme via a CSS variable; channel colors are brand-fixed.
+  assert.equal(getUserBubbleColor(), "var(--user-bg)");
   assert.equal(getUserBubbleColor("weixin"), "#08783e");
   assert.equal(getUserBubbleColor("telegram"), "#1677a8");
   assert.equal(getUserBubbleColor("feishu"), "#c2410c");

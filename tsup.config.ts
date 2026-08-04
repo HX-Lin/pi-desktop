@@ -13,7 +13,7 @@ export default defineConfig([
     sourcemap: true,
     // electron-updater is a production runtime dependency and resolves its
     // provider/platform implementation dynamically from the packaged app.
-    external: ["electron", "electron-updater"],
+    external: ["electron", "electron-updater", "node-pty"],
     splitting: false,
     treeshake: true,
     outExtension() {

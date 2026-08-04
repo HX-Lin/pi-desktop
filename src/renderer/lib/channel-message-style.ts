@@ -3,7 +3,7 @@ import type { UserMessage } from "@shared/types";
 export type MessageSource = NonNullable<UserMessage["channelSource"]> | "local";
 
 export const USER_BUBBLE_COLORS: Record<MessageSource, string> = {
-  local: "#1c1a17",
+  local: "var(--user-bg)",
   weixin: "#08783e",
   telegram: "#1677a8",
   feishu: "#c2410c",

@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useState, useCallback, useRef, type CSSProperties, type ReactNode } from "react";
 import type { SessionInfo } from "@/lib/types";
+import type { OpenProject } from "@/lib/projects";
 import { APP_VERSION, PI_VERSION } from "@/lib/app-version";
 import { useI18n } from "@/i18n";
 import {
@@ -12,6 +13,7 @@ import {
   sessionDateGroup,
   type SessionDateGroup,
 } from "@/lib/session-list";
+import { getFileName } from "@/lib/file-paths";
 
 interface Props {
   selectedSessionId: string | null;
@@ -23,6 +25,11 @@ interface Props {
   onSessionDeleted?: (sessionId: string) => void;
   selectedCwd?: string | null;
   onCwdChange?: (cwd: string | null, projectRoot?: string | null) => void;
+  /** Pinned folder projects for this window (multi-project support). */
+  openProjects?: OpenProject[];
+  activeProjectRoot?: string | null;
+  onActivateProject?: (root: string) => void;
+  onRemoveProject?: (root: string) => void;
 }
 
 interface WorktreeEntry {
@@ -347,6 +354,10 @@ export function SessionSidebar({
   onSessionDeleted,
   selectedCwd: selectedCwdProp,
   onCwdChange,
+  openProjects = [],
+  activeProjectRoot,
+  onActivateProject,
+  onRemoveProject,
 }: Props) {
   const { t } = useI18n();
   const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
@@ -615,10 +626,13 @@ export function SessionSidebar({
         // Session not found — notify parent so it can show the placeholder
         onInitialRestoreDone?.();
       }
+      // If the window already has an active project (restored from the pinned
+      // list or deep link), don't hijack it with the most-recent project.
+      if (activeProjectRoot) return;
       const projects = getRecentProjects(allSessions);
       if (projects.length > 0) setSelectedCwd(projects[0]);
     }
-  }, [allSessions, selectedCwd, initialSessionId, onSelectSession, onInitialRestoreDone]);
+  }, [allSessions, selectedCwd, initialSessionId, onSelectSession, onInitialRestoreDone, activeProjectRoot]);
 
   const commitCustomPath = useCallback(async () => {
     const path = customPathValue.trim();
@@ -848,6 +862,146 @@ export function SessionSidebar({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+      {/* Project chips — one window can pin several folder projects; clicking a
+          chip switches the active project without closing other projects' chats */}
+      {openProjects.length > 0 && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+            padding: "8px 8px 0",
+            overflowX: "auto",
+            overflowY: "hidden",
+            flexShrink: 0,
+            scrollbarWidth: "thin",
+          }}
+        >
+          {openProjects.map((project) => {
+            const isActive = project.root === activeProjectRoot;
+            const projectName = getFileName(project.root) || project.root;
+            return (
+              <div
+                key={project.root}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  flexShrink: 0,
+                  background: isActive ? "var(--bg-selected)" : "var(--bg-hover)",
+                  border: `1px solid ${isActive ? "var(--accent-soft-border)" : "var(--border)"}`,
+                  borderRadius: 7,
+                  overflow: "hidden",
+                  transition: "border-color 0.12s, background 0.12s",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => onActivateProject?.(project.root)}
+                  title={project.root}
+                  aria-pressed={isActive}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 5,
+                    maxWidth: 168,
+                    padding: "4px 4px 4px 8px",
+                    background: "none",
+                    border: "none",
+                    color: isActive ? "var(--text)" : "var(--text-muted)",
+                    cursor: "pointer",
+                    fontSize: 11,
+                    fontWeight: isActive ? 600 : 400,
+                    textAlign: "left",
+                  }}
+                >
+                  <svg
+                    width="11"
+                    height="11"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    style={{ flexShrink: 0 }}
+                    aria-hidden="true"
+                  >
+                    <path d="M3 5a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+                  </svg>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {projectName}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onRemoveProject?.(project.root)}
+                  title={t("removeProject", "Remove project")}
+                  aria-label={t("removeProject", "Remove project")}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    width: 22,
+                    height: 22,
+                    margin: 1,
+                    padding: 0,
+                    background: "none",
+                    border: "none",
+                    borderRadius: 5,
+                    color: "var(--text-dim)",
+                    cursor: "pointer",
+                    flexShrink: 0,
+                    fontSize: 13,
+                    lineHeight: 1,
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.color = "var(--danger)";
+                    e.currentTarget.style.background = "rgba(220,38,38,0.08)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.color = "var(--text-dim)";
+                    e.currentTarget.style.background = "none";
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            );
+          })}
+          <button
+            type="button"
+            onClick={() => setDropdownOpen(true)}
+            title={t("addProject", "Add project")}
+            aria-label={t("addProject", "Add project")}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 26,
+              height: 26,
+              padding: 0,
+              flexShrink: 0,
+              background: "none",
+              border: "1px dashed var(--border)",
+              borderRadius: 7,
+              color: "var(--text-dim)",
+              cursor: "pointer",
+              fontSize: 14,
+              lineHeight: 1,
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = "var(--text)";
+              e.currentTarget.style.borderColor = "var(--accent)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = "var(--text-dim)";
+              e.currentTarget.style.borderColor = "var(--border)";
+            }}
+          >
+            +
+          </button>
+        </div>
+      )}
       {/* Header */}
       <div
         style={{
