@@ -188,6 +188,10 @@ export interface Api {
     params: { path: string; sourceSessionId?: string };
     result: { base64: string; size: number; mime: string };
   };
+  "files.write": {
+    params: { path: string; content: string; sourceSessionId?: string };
+    result: { ok: true };
+  };
   "files.meta": {
     params: { path: string; sourceSessionId?: string };
     result: FileMeta;

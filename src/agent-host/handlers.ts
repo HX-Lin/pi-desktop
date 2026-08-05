@@ -633,7 +633,6 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
       if (!st.isFile()) {
         throw new RpcError({ code: "BAD_REQUEST", message: "Not a file" });
       }
-
       const imageMime = getImageMime(filePath);
       const audioMime = getAudioMime(filePath);
       const documentMime = getDocumentMime(filePath);
@@ -696,6 +695,43 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
         mime:
           getImageMime(filePath) || getAudioMime(filePath) || getDocumentMime(filePath) || "application/octet-stream",
       };
+    },
+
+    "files.write": async (params) => {
+      const {
+        path: filePath,
+        content,
+        sourceSessionId,
+      } = params as {
+        path: string;
+        content: string;
+        sourceSessionId?: string;
+      };
+      if (typeof content !== "string") {
+        throw new RpcError({ code: "BAD_REQUEST", message: "content required" });
+      }
+      if (content.length > 10 * 1024 * 1024) {
+        throw new RpcError({ code: "BAD_REQUEST", message: "File too large to write" });
+      }
+      await assertPathAllowed(filePath, sourceSessionId);
+      if (!existsSync(filePath)) throw new RpcError({ code: "NOT_FOUND", message: "File not found" });
+      const st = statSync(filePath);
+      if (!st.isFile()) throw new RpcError({ code: "BAD_REQUEST", message: "Not a file" });
+      // Atomic-ish write: write to a temp file then rename, like the config
+      // store, to avoid a half-written file on failure.
+      const tmp = `${filePath}.${process.pid}.pi-write.tmp`;
+      try {
+        writeFileSync(tmp, content, "utf8");
+        renameSync(tmp, filePath);
+      } catch (error) {
+        try {
+          if (existsSync(tmp)) unlinkSync(tmp);
+        } catch {
+          /* ignore */
+        }
+        throw error;
+      }
+      return { ok: true as const };
     },
 
     "files.meta": async (params) => {

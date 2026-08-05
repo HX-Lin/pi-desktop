@@ -829,6 +829,14 @@ function TextFileViewer({ filePath, cwd, sourceSessionId }: Props) {
   const [wrapLines, setWrapLines] = useState(false);
   const [watching, setWatching] = useState(false);
   const [changeCount, setChangeCount] = useState(0);
+  // Inline editing — files open directly in an editable state.
+  const [editing, setEditing] = useState(true);
+  const [draftContent, setDraftContent] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [savedFlash, setSavedFlash] = useState(false);
+  const editingRef = useRef(true);
+  editingRef.current = editing;
   const esRef = useRef<EventSource | null>(null);
 
   const loadGen = useRef(0);
@@ -865,6 +873,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId }: Props) {
             setChangeCount((c) => c + 1);
           } else {
             setData(payload);
+            setDraftContent(payload.content); // files open directly in edit mode
           }
           return payload;
         })
@@ -876,6 +885,25 @@ function TextFileViewer({ filePath, cwd, sourceSessionId }: Props) {
     },
     [sourceSessionId],
   );
+
+  const handleSave = useCallback(async () => {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const { writeFile } = await import("@/lib/api-client");
+      await writeFile(filePath, draftContent, sourceSessionId ?? undefined);
+      setData((prev) => (prev ? { ...prev, content: draftContent, size: draftContent.length } : prev));
+      setPrevContent(null);
+      setChangeCount(0);
+      setEditing(true); // stay editable after saving
+      setSavedFlash(true);
+      setTimeout(() => setSavedFlash(false), 1800);
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }, [filePath, draftContent, sourceSessionId]);
 
   // Initial load + watch setup
   useEffect(() => {
@@ -895,9 +923,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId }: Props) {
     }
 
     void fetchContent(filePath)
-      .then((data) => {
-        if (data?.language === "markdown") setPreviewMode(true);
-      })
+      .then(() => undefined)
       .finally(() => setLoading(false));
 
     const es = new EventSource(getFileApiUrl(filePath, "watch", sourceSessionId));
@@ -908,6 +934,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId }: Props) {
     });
 
     es.addEventListener("change", () => {
+      if (editingRef.current) return; // never clobber an in-progress edit
       void fetchContent(filePath, true);
     });
 
@@ -1051,7 +1078,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId }: Props) {
         )}
 
         {/* Word wrap toggle */}
-        {viewMode === "source" && !previewMode && (
+        {viewMode === "source" && !previewMode && !editing && (
           <button
             type="button"
             onClick={() => setWrapLines((v) => !v)}
@@ -1071,6 +1098,51 @@ function TextFileViewer({ filePath, cwd, sourceSessionId }: Props) {
             wrap
           </button>
         )}
+
+        {/* Inline edit / save controls — files open directly in edit mode */}
+        {editing && (
+          <>
+            <button
+              type="button"
+              onClick={() => void handleSave()}
+              disabled={saving}
+              style={{
+                minHeight: 32,
+                padding: "0 10px",
+                fontSize: 12,
+                cursor: saving ? "default" : "pointer",
+                background: "var(--accent)",
+                color: "#fff",
+                border: "none",
+                borderRadius: 5,
+                opacity: saving ? 0.6 : 1,
+              }}
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setEditing(false);
+                setSaveError(null);
+              }}
+              disabled={saving}
+              style={{
+                minHeight: 32,
+                padding: "0 10px",
+                fontSize: 12,
+                cursor: saving ? "default" : "pointer",
+                background: "var(--bg-hover)",
+                color: "var(--text-muted)",
+                border: "1px solid var(--border)",
+                borderRadius: 5,
+              }}
+            >
+              Done
+            </button>
+          </>
+        )}
+        {savedFlash && <span style={{ fontSize: 11, color: "#4ade80", alignSelf: "center" }}>Saved</span>}
 
         {/* HTML source/preview toggle */}
         {isHtml && viewMode === "source" && (
@@ -1154,7 +1226,47 @@ function TextFileViewer({ filePath, cwd, sourceSessionId }: Props) {
 
       {/* Content area */}
       <div style={{ flex: 1, minHeight: 0, overflow: "auto", background: "var(--bg)" }}>
-        {viewMode === "diff" && hasDiff ? (
+        {editing ? (
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              height: "100%",
+              padding: 12,
+              boxSizing: "border-box",
+            }}
+          >
+            <textarea
+              value={draftContent}
+              onChange={(e) => setDraftContent(e.target.value)}
+              onKeyDown={(e) => {
+                if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+                  e.preventDefault();
+                  void handleSave();
+                }
+              }}
+              spellCheck={false}
+              autoFocus
+              aria-label="File content editor"
+              style={{
+                flex: 1,
+                minHeight: 0,
+                resize: "none",
+                border: "1px solid var(--border)",
+                borderRadius: 7,
+                background: "var(--bg-panel)",
+                color: "var(--text)",
+                padding: 12,
+                fontFamily: "var(--font-mono)",
+                fontSize: 13,
+                lineHeight: 1.6,
+                outline: "none",
+                tabSize: 2,
+              }}
+            />
+            {saveError && <div style={{ padding: "8px 2px 0", fontSize: 11, color: "#f87171" }}>{saveError}</div>}
+          </div>
+        ) : viewMode === "diff" && hasDiff ? (
           <DiffView oldContent={prevContent!} newContent={data.content} language={data.language} />
         ) : isHtml && previewMode ? (
           <HtmlPreview content={data.content} filePath={filePath} sourceSessionId={sourceSessionId} />

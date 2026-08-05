@@ -233,6 +233,10 @@ export async function fileMeta(path: string, sourceSessionId?: string) {
   return call("files.meta", { path, sourceSessionId });
 }
 
+export async function writeFile(path: string, content: string, sourceSessionId?: string) {
+  return call("files.write", { path, content, sourceSessionId });
+}
+
 export async function fileIndex(root: string, query?: string) {
   return call("files.index", { root, query });
 }

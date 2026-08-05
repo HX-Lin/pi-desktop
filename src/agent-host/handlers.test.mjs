@@ -53,7 +53,7 @@ async function captureHandlers() {
 
 test("registerHandlers exposes every contract method exactly once", async () => {
   const { handlers } = await captureHandlers();
-  assert.equal(Object.keys(handlers).length, 68);
+  assert.equal(Object.keys(handlers).length, 69);
   for (const method of [
     "host.ping",
     "host.toolchain",
@@ -65,6 +65,7 @@ test("registerHandlers exposes every contract method exactly once", async () => 
     "channels.accountConnect",
     "files.list",
     "files.download",
+    "files.write",
     "models.list",
     "auth.providers",
     "skills.list",
@@ -236,4 +237,37 @@ test("session, model configuration, and auth handlers isolate state and preserve
     (error) => error.code === "PARSE_ERROR",
   );
   assert.equal(readFileSync(modelsPath, "utf8"), "{broken json");
+});
+
+test("files.write saves content with path-safety checks", async (t) => {
+  const base = mkdtempSync(path.join(tmpdir(), "pi-write-test-"));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const project = path.join(base, "project");
+  mkdirSync(project, { recursive: true });
+  const target = path.join(project, "edit.txt");
+  writeFileSync(target, "original\n", "utf8");
+
+  const { handlers } = await captureHandlers();
+  await handlers["system.allowRoot"]({ path: base });
+
+  assert.deepEqual(await handlers["files.write"]({ path: target, content: "edited content\n" }), { ok: true });
+  assert.equal(readFileSync(target, "utf8"), "edited content\n");
+
+  // Rejects writes outside the allowed roots.
+  await assert.rejects(
+    handlers["files.write"]({ path: path.join(tmpdir(), "elsewhere.txt"), content: "x" }),
+    (error) => error.code === "FORBIDDEN",
+  );
+
+  // Rejects writes to missing files.
+  await assert.rejects(
+    handlers["files.write"]({ path: path.join(project, "missing.txt"), content: "x" }),
+    (error) => error.code === "NOT_FOUND" || error.code === "BAD_REQUEST",
+  );
+
+  // Rejects oversized content.
+  await assert.rejects(
+    handlers["files.write"]({ path: target, content: "x".repeat(10 * 1024 * 1024 + 1) }),
+    (error) => error.code === "BAD_REQUEST",
+  );
 });
