@@ -169,12 +169,12 @@ export async function listSessions() {
   return call("sessions.list");
 }
 
-export async function getSession(id: string, includeState?: boolean) {
-  return call("sessions.get", { id, includeState });
+export async function getSession(id: string, includeState?: boolean, limit?: number) {
+  return call("sessions.get", { id, includeState, ...(limit ? { limit } : {}) });
 }
 
-export async function getSessionContext(id: string, leafId?: string) {
-  return call("sessions.context", { id, leafId });
+export async function getSessionContext(id: string, leafId?: string, limit?: number) {
+  return call("sessions.context", { id, leafId, ...(limit ? { limit } : {}) });
 }
 
 export async function exportSession(id: string, format: "md" | "json" = "md") {

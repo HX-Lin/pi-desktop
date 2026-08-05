@@ -274,6 +274,10 @@ export function ChatWindow({
     handleToolPresetChange,
     handleThinkingLevelChange,
     loadSlashCommands,
+    loadOlderMessages,
+    hasOlderMessages,
+    totalMessageCount,
+    messageLimit,
   } = useAgentSession({
     session,
     newSessionCwd,
@@ -347,6 +351,40 @@ export function ChatWindow({
 
   const visibleMessages = messages.filter((m) => m.role === "user" || m.role === "assistant");
   const messageRefs = useMessageRefs(visibleMessages.length);
+
+  // The "load earlier messages" affordance appears only when the user has
+  // scrolled to the very top of the conversation (no older messages above).
+  const [atConversationTop, setAtConversationTop] = useState(true);
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      const next = el.scrollTop <= 40;
+      setAtConversationTop((prev) => (prev === next ? prev : next));
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => el.removeEventListener("scroll", onScroll);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the scroll container ref is stable for the component's lifetime.
+  }, []);
+
+  // Progressive message mounting: mounting every MessageView at once stalls
+  // the UI when switching to a big session. Mount the most recent slice first
+  // and fill the rest over the next frames (the user perceives an instant
+  // first paint).
+  const [visibleMessageCount, setVisibleMessageCount] = useState(Number.MAX_SAFE_INTEGER);
+  useEffect(() => {
+    setVisibleMessageCount(24);
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      setVisibleMessageCount(80);
+      raf2 = requestAnimationFrame(() => setVisibleMessageCount(Number.MAX_SAFE_INTEGER));
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+    };
+  }, [messages.length]);
 
   const isEmptyNew = isNew && messages.length === 0 && !streamState.isStreaming && !agentRunning;
   const messageCwd = session?.cwd ?? newSessionCwd ?? undefined;
@@ -578,6 +616,35 @@ export function ChatWindow({
                   <ExtensionStatusBar statuses={extensionStatuses} />
                   <ExtensionWidgets widgets={aboveEditorWidgets} />
 
+                  {hasOlderMessages && atConversationTop && (
+                    <div style={{ display: "flex", justifyContent: "center", padding: "4px 0 10px" }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const el = scrollContainerRef.current;
+                          const prevHeight = el?.scrollHeight ?? 0;
+                          void loadOlderMessages().then(() => {
+                            requestAnimationFrame(() => {
+                              if (el) el.scrollTop += el.scrollHeight - prevHeight;
+                            });
+                          });
+                        }}
+                        disabled={loading}
+                        style={{
+                          padding: "7px 14px",
+                          borderRadius: 6,
+                          border: "1px solid var(--border)",
+                          background: "var(--bg-panel)",
+                          color: "var(--text-muted)",
+                          fontSize: 12,
+                          cursor: loading ? "default" : "pointer",
+                        }}
+                      >
+                        {t("loadEarlierMessages", "↑ Load earlier messages")} ({messageLimit}/{totalMessageCount})
+                      </button>
+                    </div>
+                  )}
+
                   {(() => {
                     const toolResultsMap = new Map<string, ToolResultMessage>();
                     for (const msg of messages) {
@@ -782,7 +849,25 @@ export function ChatWindow({
                       }
                       idx = endIdx;
                     }
-                    return rendered;
+                    // Progressive mount: only the most recent slice is attached
+                    // now; the rest is filled in over the next frames so
+                    // switching to a big session paints instantly.
+                    if (visibleMessageCount >= rendered.length) return rendered;
+                    const visible = rendered.slice(-visibleMessageCount);
+                    return [
+                      ...visible,
+                      <div
+                        key="progressive-fill"
+                        style={{
+                          padding: "6px 0",
+                          fontSize: 11,
+                          color: "var(--text-dim)",
+                          textAlign: "center",
+                        }}
+                      >
+                        {t("renderingMessages", "Rendering messages…")}
+                      </div>,
+                    ];
                   })()}
 
                   {streamState.isStreaming && streamState.streamingMessage && (

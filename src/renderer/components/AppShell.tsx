@@ -4,6 +4,7 @@ import {
   useCallback,
   useRef,
   useEffect,
+  useMemo,
   useSyncExternalStore,
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -78,14 +79,17 @@ function useSearchParamsCompat() {
 }
 
 function useRouterCompat() {
-  return {
-    replace: (url: string, _opts?: { scroll?: boolean }) => {
-      const next = url.startsWith("?") || url.startsWith("/") ? url : `?${url}`;
-      const full = next.startsWith("?") ? `${window.location.pathname}${next}` : next;
-      window.history.replaceState(null, "", full === "/" ? "/" : full);
-      window.dispatchEvent(new Event("popstate"));
-    },
-  };
+  // Stable identity: handleSelectSession/handleCwdChange depend on `router`.
+  // If this object were recreated on every render, those callbacks (and every
+  // effect depending on them, e.g. SessionSidebar) would re-run each render
+  // and could enter a synchronous update loop (#185).
+  const replace = useCallback((url: string, _opts?: { scroll?: boolean }) => {
+    const next = url.startsWith("?") || url.startsWith("/") ? url : `?${url}`;
+    const full = next.startsWith("?") ? `${window.location.pathname}${next}` : next;
+    window.history.replaceState(null, "", full === "/" ? "/" : full);
+    window.dispatchEvent(new Event("popstate"));
+  }, []);
+  return useMemo(() => ({ replace }), [replace]);
 }
 
 export function AppShell() {
@@ -351,9 +355,16 @@ export function AppShell() {
   }, [openProjects]);
 
   // Keep the active project's view state (open session / new-session cwd / cwd)
-  // so switching projects later can restore exactly what was open.
+  // so switching projects later can restore exactly what was open. Only store
+  // a session that actually belongs to this project: during a cross-project
+  // switch, selectedSession briefly points at the *other* project's session,
+  // and storing it here would poison the saved view and create an endless
+  // pi-desktop ↔ gpt-do switching loop (#185).
   useEffect(() => {
     if (!activeProjectRoot) return;
+    if (selectedSession != null && (selectedSession.projectRoot ?? selectedSession.cwd) !== activeProjectRoot) {
+      return; // keep this project's previously saved view
+    }
     projectViewRef.current[activeProjectRoot] = { session: selectedSession, newSessionCwd, cwd: activeCwd };
   }, [activeProjectRoot, selectedSession, newSessionCwd, activeCwd]);
 
@@ -374,6 +385,11 @@ export function AppShell() {
   const saveProjectView = useCallback(
     (root: string | null) => {
       if (!root) return;
+      // Same project-membership guard as the effect above: never store a
+      // session that belongs to a different project into this project's slot.
+      if (selectedSession != null && (selectedSession.projectRoot ?? selectedSession.cwd) !== root) {
+        return;
+      }
       projectViewRef.current[root] = { session: selectedSession, newSessionCwd, cwd: activeCwd };
     },
     [selectedSession, newSessionCwd, activeCwd],
@@ -521,6 +537,11 @@ export function AppShell() {
 
   const handleCwdChange = useCallback(
     (cwd: string | null, projectRoot?: string | null) => {
+      // Break the onCwdChange ↔ setActiveCwd feedback loop: the sidebar only
+      // notifies on cwd transitions, but the resulting AppShell state change
+      // feeds a new selectedCwd prop back in. Without this guard the same
+      // cwd re-enters handleCwdChange forever (React #185 update loop).
+      if (cwd === activeCwd) return;
       setActiveCwd(cwd);
       // Skip if cwd is null (initial mount) or during the initial URL restore.
       if (!cwd) return;
@@ -578,7 +599,7 @@ export function AppShell() {
       setActiveTopPanel(null);
       router.replace("/", { scroll: false });
     },
-    [activeProjectRoot, router, saveProjectView, selectedSession],
+    [activeCwd, activeProjectRoot, router, saveProjectView, selectedSession],
   );
 
   const handleSelectSession = useCallback(

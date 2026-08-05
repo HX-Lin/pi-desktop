@@ -293,4 +293,8 @@ export interface SessionContext {
   entryIds: string[]; // parallel to messages — the session entry id for each message
   thinkingLevel: string;
   model: { provider: string; modelId: string } | null;
+  /** Total message count on this branch (before pagination truncation). */
+  totalMessageCount?: number;
+  /** True when only the most recent page of messages was returned. */
+  truncated?: boolean;
 }

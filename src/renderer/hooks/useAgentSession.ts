@@ -33,8 +33,16 @@ export interface SessionData {
     entryIds: string[];
     thinkingLevel: string;
     model: { provider: string; modelId: string } | null;
+    /** Total messages on this branch (before pagination). */
+    totalMessageCount?: number;
+    /** True when only the most recent page was returned. */
+    truncated?: boolean;
   };
 }
+
+/** Messages rendered initially; older ones load on demand to keep huge
+ * sessions from rendering thousands of nodes at once. */
+export const MESSAGE_PAGE_SIZE = 50;
 
 interface StreamingState {
   isStreaming: boolean;
@@ -381,6 +389,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const eventUnsubRef = useRef<(() => void) | null>(null);
   const sessionIdRef = useRef<string | null>(session?.id ?? null);
   const agentRunningRef = useRef(false);
+  const [messageLimit, setMessageLimit] = useState(MESSAGE_PAGE_SIZE);
+  const messageLimitRef = useRef(MESSAGE_PAGE_SIZE);
+  messageLimitRef.current = messageLimit;
+  const hasOlderMessages = data?.context.truncated === true;
+  const totalMessageCount = data?.context.totalMessageCount ?? messages.length;
   const handleAgentEventRef = useRef<((event: AgentEvent) => void) | null>(null);
   const initialScrollDoneRef = useRef(false);
   const lastUserMsgRef = useRef<HTMLDivElement | null>(null);
@@ -448,7 +461,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       let result: SessionData & { agentState?: { running: boolean; state?: AgentStateResponse } };
       try {
         // Host returns the same flat shape as old GET /api/sessions/[id]
-        result = (await getSession(sid, includeState)) as unknown as SessionData & {
+        result = (await getSession(sid, includeState, messageLimitRef.current)) as unknown as SessionData & {
           agentState?: { running: boolean; state?: AgentStateResponse };
         };
       } catch (e) {
@@ -501,7 +514,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     // ISSUE-007: only apply the latest navigation result
     const gen = ++contextGenRef.current;
     try {
-      const d = await getSessionContext(sid, leafId ?? undefined);
+      const d = await getSessionContext(sid, leafId ?? undefined, messageLimitRef.current);
       if (gen !== contextGenRef.current) return;
       setMessages(d.context.messages as AgentMessage[]);
       setEntryIds(d.context.entryIds ?? []);
@@ -1540,6 +1553,17 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, []);
 
   // Load session on mount
+  // Host restart recovery: when the agent host is (re)started, the MessagePort
+  // used by the event stream is torn down. Bump the epoch so the lifecycle
+  // effect below resubscribes and reloads the session state (otherwise the UI
+  // stays stuck on a stale running indicator with no live updates).
+  const [hostEpoch, setHostEpoch] = useState(0);
+  useEffect(() => {
+    const onHostReady = () => setHostEpoch((epoch) => epoch + 1);
+    window.addEventListener("pi:host-ready", onHostReady);
+    return () => window.removeEventListener("pi:host-ready", onHostReady);
+  }, []);
+
   useEffect(() => {
     let disposed = false;
     let unsubscribeLiveSync: (() => void) | undefined;
@@ -1605,7 +1629,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       eventUnsubRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- session identity owns this lifecycle effect.
-  }, []);
+  }, [hostEpoch]);
 
   useEffect(() => {
     onSystemPromptChange?.(systemPrompt);
@@ -1706,6 +1730,15 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     setSessionStatsOverride(null);
   }, [messages.length, contextUsage?.tokens, contextUsage?.percent, contextUsage?.contextWindow]);
 
+  const loadOlderMessages = useCallback(async () => {
+    const next = messageLimitRef.current + MESSAGE_PAGE_SIZE;
+    messageLimitRef.current = next;
+    setMessageLimit(next);
+    if (sessionIdRef.current) {
+      await loadSession(sessionIdRef.current, false, true);
+    }
+  }, [loadSession]);
+
   return {
     // State
     data,
@@ -1736,6 +1769,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     slashCommands,
     slashCommandsLoading,
     queuedMessages,
+    messageLimit,
+    hasOlderMessages,
+    totalMessageCount,
     notices: noticeState.visible,
     extensionDialog,
     extensionCustomUi,
@@ -1772,6 +1808,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     handleThinkingLevelChange,
     loadTools,
     loadSlashCommands,
+    loadOlderMessages,
     setActiveLeafId,
     setData,
     setMessages,

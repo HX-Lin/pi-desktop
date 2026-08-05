@@ -19,6 +19,8 @@ import type {
   GitStatusResult,
   PluginActionParams,
   PluginsResponse,
+  PromptScope,
+  PromptsListResult,
   SkillRecord,
   SkillUpdateParams,
 } from "../shared/api-types";
@@ -55,11 +57,11 @@ export interface Api {
     result: { sessions: SessionInfo[]; runningSessionIds: string[] };
   };
   "sessions.get": {
-    params: { id: string; includeState?: boolean };
+    params: { id: string; includeState?: boolean; limit?: number };
     result: SessionDetail;
   };
   "sessions.context": {
-    params: { id: string; leafId?: string };
+    params: { id: string; leafId?: string; limit?: number };
     result: { context: ContextInfo };
   };
   "sessions.export": {
@@ -272,6 +274,23 @@ export interface Api {
   "skills.getContent": {
     params: { cwd: string; filePath: string };
     result: { content: string };
+  };
+
+  "prompts.list": {
+    params: { cwd?: string } | void;
+    result: PromptsListResult;
+  };
+  "prompts.read": {
+    params: { cwd?: string; scope: PromptScope; filePath: string };
+    result: { content: string };
+  };
+  "prompts.write": {
+    params: { cwd?: string; scope: PromptScope; filePath: string; content: string };
+    result: { ok: true };
+  };
+  "prompts.delete": {
+    params: { cwd?: string; scope: PromptScope; filePath: string };
+    result: { ok: true };
   };
 
   "plugins.list": {

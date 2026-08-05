@@ -12,6 +12,7 @@ import {
 } from "@/lib/niri-settings";
 import { ModelsConfig } from "./ModelsConfig";
 import { SkillsConfig } from "./SkillsConfig";
+import { PromptsConfig } from "./PromptsConfig";
 import { PluginsConfig } from "./PluginsConfig";
 import { ToolchainsConfig } from "./ToolchainsConfig";
 import { ChannelsConfig } from "./channels/ChannelsConfig";
@@ -20,7 +21,7 @@ import type { DesktopUpdateState } from "../../contract/desktop";
 import { APP_AUTHOR, APP_DISPLAY_NAME, APP_GITHUB_URL, APP_VERSION, PI_VERSION } from "@/lib/app-version";
 import appIconUrl from "../../../build/icon.png";
 
-export type SettingsTab = "general" | "channels" | "models" | "tools" | "skills" | "plugins" | "about";
+export type SettingsTab = "general" | "channels" | "models" | "tools" | "skills" | "prompts" | "plugins" | "about";
 
 interface SettingsConfigProps {
   cwd: string | null;
@@ -76,6 +77,7 @@ export function SettingsConfig({
     { id: "general", label: t("general", "General") },
     { id: "models", label: t("models", "Models") },
     { id: "skills", label: t("skills", "Skills") },
+    { id: "prompts", label: t("prompts", "Prompts") },
     { id: "plugins", label: t("plugins", "Plugins") },
     { id: "channels", label: t("channels", "Channels") },
     { id: "tools", label: t("developerTools", "Developer Tools") },
@@ -266,6 +268,8 @@ export function SettingsConfig({
           {activeTab === "channels" && <ChannelsConfig onSnapshotChange={onChannelsChanged} />}
           {activeTab === "skills" &&
             (cwd ? <SkillsConfig embedded cwd={cwd} onClose={() => undefined} /> : <ProjectRequired />)}
+          {activeTab === "prompts" &&
+            (cwd ? <PromptsConfig embedded cwd={cwd} onClose={() => undefined} /> : <ProjectRequired />)}
           {activeTab === "plugins" &&
             (cwd ? (
               <PluginsConfig

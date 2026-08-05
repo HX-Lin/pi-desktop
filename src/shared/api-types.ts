@@ -23,6 +23,22 @@ export interface SkillUpdateParams {
   content?: string;
 }
 
+export type PromptScope = "project" | "global";
+
+export interface PromptRecord {
+  /** Template name = file name without the .md suffix. */
+  name: string;
+  /** Front-matter description or first line of the file. */
+  description: string;
+  filePath: string;
+  scope: PromptScope;
+}
+
+export interface PromptsListResult {
+  project: PromptRecord[];
+  global: PromptRecord[];
+}
+
 export interface GitStatusEntry {
   path: string;
   index: string;

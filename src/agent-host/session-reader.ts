@@ -76,7 +76,7 @@ export function getSessionEntries(filePath: string): SessionEntry[] {
   return entries as unknown as SessionEntry[];
 }
 
-export function buildSessionContext(entries: SessionEntry[], leafId?: string | null): SessionContext {
+export function buildSessionContext(entries: SessionEntry[], leafId?: string | null, limit?: number): SessionContext {
   const byId = new Map<string, SessionEntry>();
   for (const e of entries) byId.set(e.id, e);
 
@@ -87,12 +87,26 @@ export function buildSessionContext(entries: SessionEntry[], leafId?: string | n
   // Needed for fork and navigate_tree calls from the UI.
   let targetLeaf: SessionEntry | undefined;
   if (leafId === null) {
-    return { messages: [], entryIds: [], thinkingLevel: piCtx.thinkingLevel, model: piCtx.model };
+    return {
+      messages: [],
+      entryIds: [],
+      thinkingLevel: piCtx.thinkingLevel,
+      model: piCtx.model,
+      totalMessageCount: 0,
+      truncated: false,
+    };
   }
   if (leafId) targetLeaf = byId.get(leafId);
   if (!targetLeaf) targetLeaf = entries[entries.length - 1];
   if (!targetLeaf) {
-    return { messages: [], entryIds: [], thinkingLevel: piCtx.thinkingLevel, model: piCtx.model };
+    return {
+      messages: [],
+      entryIds: [],
+      thinkingLevel: piCtx.thinkingLevel,
+      model: piCtx.model,
+      totalMessageCount: 0,
+      truncated: false,
+    };
   }
 
   // Walk path from target leaf to root
@@ -135,11 +149,21 @@ export function buildSessionContext(entries: SessionEntry[], leafId?: string | n
     }
   }
 
+  // Large sessions are paginated: the UI first loads the most recent `limit`
+  // messages and lazily fetches older ones. The full count lets the client
+  // render a "load earlier messages" affordance.
+  const totalMessageCount = messages.length;
+  const truncated = typeof limit === "number" && limit > 0 && messages.length > limit;
+  const slicedMessages = truncated ? messages.slice(-limit) : messages;
+  const slicedEntryIds = truncated ? entryIds.slice(-limit) : entryIds;
+
   return {
-    messages,
-    entryIds,
+    messages: slicedMessages,
+    entryIds: slicedEntryIds,
     thinkingLevel: piCtx.thinkingLevel,
     model: piCtx.model,
+    totalMessageCount,
+    truncated,
   };
 }
 

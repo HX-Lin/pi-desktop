@@ -135,3 +135,54 @@ test("internal attachment context is omitted from UI history", () => {
   assert.equal(context.messages.length, 1);
   assert.equal(context.messages[0].role, "user");
 });
+
+test("limit truncates to the most recent messages and reports totals", () => {
+  const entries = [
+    {
+      type: "message",
+      id: "m1",
+      parentId: null,
+      timestamp,
+      message: { role: "user", content: "one" },
+    },
+    {
+      type: "message",
+      id: "m2",
+      parentId: "m1",
+      timestamp,
+      message: { role: "assistant", content: [{ type: "text", text: "two" }] },
+    },
+    {
+      type: "message",
+      id: "m3",
+      parentId: "m2",
+      timestamp,
+      message: { role: "user", content: "three" },
+    },
+    {
+      type: "message",
+      id: "m4",
+      parentId: "m3",
+      timestamp,
+      message: { role: "assistant", content: [{ type: "text", text: "four" }] },
+    },
+  ];
+
+  const full = buildSessionContext(entries);
+  assert.equal(full.messages.length, 4);
+  assert.equal(full.totalMessageCount, 4);
+  assert.equal(full.truncated, false);
+
+  const limited = buildSessionContext(entries, undefined, 2);
+  assert.equal(limited.truncated, true);
+  assert.equal(limited.totalMessageCount, 4);
+  assert.equal(limited.messages.length, 2);
+  assert.equal(limited.messages[0].content, "three");
+  assert.equal(limited.messages[1].content[0].text, "four");
+  assert.equal(limited.entryIds.length, 2);
+  assert.equal(limited.entryIds[1], "m4");
+
+  const bigEnough = buildSessionContext(entries, undefined, 10);
+  assert.equal(bigEnough.truncated, false);
+  assert.equal(bigEnough.messages.length, 4);
+});

@@ -11,6 +11,19 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error("[pi-desktop] render error:", error, info.componentStack);
+    // One automatic recovery attempt: reloading usually clears the transient
+    // state (stale session stream, extension UI request) that triggered the
+    // update loop. Only surface the crash UI if it happens repeatedly.
+    try {
+      const count = Number(window.sessionStorage.getItem("pi-crash-count") ?? "0") + 1;
+      window.sessionStorage.setItem("pi-crash-count", String(count));
+      if (count <= 1) {
+        window.location.reload();
+        return;
+      }
+    } catch {
+      /* sessionStorage unavailable — fall through to the crash UI */
+    }
   }
 
   render() {
@@ -47,6 +60,10 @@ export function App() {
           if (!cancelled) {
             setReady(true);
             setError(null);
+            // Let mounted consumers (useAgentSession etc.) know the RPC
+            // connection was (re)established so they can resubscribe their
+            // session event streams after a host restart.
+            window.dispatchEvent(new CustomEvent("pi:host-ready"));
           }
         })
         .catch((err) => {

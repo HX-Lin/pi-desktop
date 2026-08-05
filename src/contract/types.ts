@@ -27,6 +27,10 @@ export interface ContextInfo {
   entryIds: string[];
   thinkingLevel?: string;
   model?: { provider: string; modelId: string } | null;
+  /** Total message count across the whole branch (before any limit truncation). */
+  totalMessageCount?: number;
+  /** True when `messages` was truncated to the most recent `limit` entries. */
+  truncated?: boolean;
 }
 
 export interface WorktreeInfo {

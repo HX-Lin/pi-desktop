@@ -58,6 +58,7 @@ import { getSharedModelRuntime, reloadSharedModelRuntimeConfig } from "./model-r
 import { applyPluginAction, readPlugins } from "./plugins-service";
 import { installSkill, searchSkills } from "./skills-service";
 import { projectTreeForResponse } from "./project-tree";
+import type { PromptRecord, PromptScope } from "../shared/api-types";
 import { ChannelManager } from "./channels/channel-manager";
 import { ToolchainError } from "../shared/toolchains/errors";
 import { toolchainRuntime } from "./toolchain-runtime";
@@ -282,7 +283,7 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
     },
 
     "sessions.get": async (params) => {
-      const { id, includeState } = params as { id: string; includeState?: boolean };
+      const { id, includeState, limit } = params as { id: string; includeState?: boolean; limit?: number };
       const filePath = await resolveSessionPath(id);
       if (!filePath) throw new RpcError({ code: "NOT_FOUND", message: "Session not found" });
 
@@ -290,7 +291,7 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
       const entries = sm.getEntries() as never;
       const leafId = sm.getLeafId();
       const tree = projectTreeForResponse(sm.getTree() as never);
-      const context = buildSessionContext(entries, leafId);
+      const context = buildSessionContext(entries, leafId, limit);
       const all = await listAllSessions();
       const info = all.find((s) => s.id === id);
 
@@ -318,11 +319,11 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
     },
 
     "sessions.context": async (params) => {
-      const { id, leafId } = params as { id: string; leafId?: string };
+      const { id, leafId, limit } = params as { id: string; leafId?: string; limit?: number };
       const filePath = await resolveSessionPath(id);
       if (!filePath) throw new RpcError({ code: "NOT_FOUND", message: "Session not found" });
       const sm = SessionManager.open(filePath);
-      const context = buildSessionContext(sm.getEntries() as never, leafId);
+      const context = buildSessionContext(sm.getEntries() as never, leafId, limit);
       return { context: context as never };
     },
 
@@ -1209,6 +1210,48 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
       return { content: readFileSync(skill.filePath, "utf8") };
     },
 
+    "prompts.list": async (params) => {
+      const cwd = (params as { cwd?: string } | void)?.cwd;
+      if (!cwd) throw new RpcError({ code: "BAD_REQUEST", message: "cwd required" });
+      const projectDir = path.join(cwd, ".pi", "prompts");
+      const globalDir = path.join(getAgentDir(), "prompts");
+      return {
+        project: readPromptDir(projectDir, "project"),
+        global: readPromptDir(globalDir, "global"),
+        projectDir,
+        globalDir,
+      };
+    },
+
+    "prompts.read": async (params) => {
+      const body = params as { cwd?: string; scope?: PromptScope; filePath: string };
+      const target = resolvePromptTarget(body.cwd, body.scope, body.filePath);
+      if (!existsSync(target)) throw new RpcError({ code: "NOT_FOUND", message: "Prompt file not found" });
+      return { content: readFileSync(target, "utf8") };
+    },
+
+    "prompts.write": async (params) => {
+      const body = params as { cwd?: string; scope?: PromptScope; filePath: string; content: string };
+      if (typeof body.content !== "string") {
+        throw new RpcError({ code: "BAD_REQUEST", message: "content required" });
+      }
+      const target = resolvePromptTarget(body.cwd, body.scope, body.filePath);
+      if (body.content.length > 512 * 1024) {
+        throw new RpcError({ code: "BAD_REQUEST", message: "Prompt file is too large" });
+      }
+      mkdirSync(path.dirname(target), { recursive: true });
+      writeFileSync(target, body.content, "utf8");
+      return { ok: true as const };
+    },
+
+    "prompts.delete": async (params) => {
+      const body = params as { cwd?: string; scope?: PromptScope; filePath: string };
+      const target = resolvePromptTarget(body.cwd, body.scope, body.filePath);
+      if (!existsSync(target)) throw new RpcError({ code: "NOT_FOUND", message: "Prompt file not found" });
+      unlinkSync(target);
+      return { ok: true as const };
+    },
+
     "plugins.list": async (params) => {
       const cwd = (params as { cwd?: string } | void)?.cwd;
       if (!cwd) throw new RpcError({ code: "BAD_REQUEST", message: "cwd required" });
@@ -1324,5 +1367,75 @@ function ensureSessionEvents(
   eventUnsubsBySession.set(key, unsub);
   session.onDestroy?.(() => {
     clearSessionEventBinding(key);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Prompt templates (`.pi/prompts/` project + `~/.pi/agent/prompts/` global)
+// ---------------------------------------------------------------------------
+
+function promptsRootFor(cwd: string | undefined, scope: "project" | "global"): string | null {
+  if (scope === "project") {
+    if (!cwd || !path.isAbsolute(cwd)) return null;
+    return path.join(cwd, ".pi", "prompts");
+  }
+  return path.join(getAgentDir(), "prompts");
+}
+
+function isFileInside(dir: string, filePath: string): boolean {
+  const resolved = path.resolve(filePath);
+  const base = path.resolve(dir);
+  return resolved === base || resolved.startsWith(base + path.sep);
+}
+
+/** Resolve a read/write/delete target, enforcing it stays inside its scope dir. */
+function resolvePromptTarget(cwd: string | undefined, scope: PromptScope | undefined, filePath: string): string {
+  if (typeof filePath !== "string" || !filePath.trim()) {
+    throw new RpcError({ code: "BAD_REQUEST", message: "filePath required" });
+  }
+  const dir = promptsRootFor(cwd, scope === "global" ? "global" : "project");
+  if (!dir) throw new RpcError({ code: "BAD_REQUEST", message: "cwd required for project prompts" });
+  const target = path.isAbsolute(filePath) ? filePath : path.join(dir, filePath);
+  if (!isFileInside(dir, target)) {
+    throw new RpcError({ code: "FORBIDDEN", message: "Path is outside the prompts directory" });
+  }
+  return target;
+}
+
+function readPromptDir(dir: string, scope: "project" | "global"): PromptRecord[] {
+  if (!existsSync(dir)) return [];
+  let entries: string[];
+  try {
+    entries = readdirSync(dir, { withFileTypes: true })
+      .filter((e) => e.isFile() && e.name.toLowerCase().endsWith(".md"))
+      .map((e) => e.name)
+      .sort();
+  } catch {
+    return [];
+  }
+  return entries.map((name) => {
+    const filePath = path.join(dir, name);
+    const record: PromptRecord = {
+      name: name.replace(/\.md$/i, ""),
+      description: "",
+      filePath,
+      scope,
+    };
+    try {
+      const content = readFileSync(filePath, "utf8");
+      const { frontmatter } = parseFrontmatter<Record<string, unknown>>(content);
+      if (typeof frontmatter.description === "string" && frontmatter.description.trim()) {
+        record.description = frontmatter.description.trim();
+      } else {
+        const firstLine = content
+          .split(/\r?\n/)
+          .map((l) => l.trim())
+          .find((l) => l.length > 0 && !l.startsWith("#") && !l.startsWith("---"));
+        record.description = (firstLine ?? "").slice(0, 80);
+      }
+    } catch {
+      /* unreadable file — keep the name only */
+    }
+    return record;
   });
 }
