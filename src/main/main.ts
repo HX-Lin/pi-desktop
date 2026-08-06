@@ -27,6 +27,16 @@ import { createElectronRuntimeFetch } from "./toolchains/electron-runtime-fetch"
 
 // Must run before app ready
 registerAppProtocol();
+
+// On Linux, Chromium picks its OS-crypt backend by desktop environment and
+// misses niri (XDG_CURRENT_DESKTOP=niri), silently falling back to basic_text
+// so safeStorage reports unavailable even with gnome-keyring running. Force
+// the libsecret backend; if the Secret Service truly is absent, safeStorage
+// reports unavailable and the credential vault degrades to its own AES key.
+if (process.platform === "linux") {
+  app.commandLine.appendSwitch("password-store", "gnome-libsecret");
+}
+
 crashReporter.start({
   productName: "Pi Agent Desktop",
   uploadToServer: false,

@@ -1,4 +1,5 @@
 import { safeStorage } from "electron";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -6,6 +7,9 @@ type VaultFile = {
   version: 1;
   entries: Record<string, string>;
 };
+
+/** Prefix used by the fallback (application-key AES) encryption. */
+const FALLBACK_PREFIX = "v2.";
 
 function validateKey(key: string): string {
   const trimmed = key.trim();
@@ -15,8 +19,65 @@ function validateKey(key: string): string {
   return trimmed;
 }
 
+/**
+ * AES-256-GCM cipher keyed by an application-private key file. Used when the
+ * OS keyring / safeStorage backend is unavailable (e.g. Linux desktops with no
+ * gnome-keyring/kwallet service). The key lives in the app's userData dir with
+ * 0600 permissions, so credentials are still encrypted at rest — just not
+ * bound to the OS account like safeStorage would be.
+ */
+class FallbackCipher {
+  private key: Buffer | null = null;
+
+  constructor(private readonly keyPath: string) {}
+
+  private getKey(): Buffer {
+    if (this.key) return this.key;
+    try {
+      const raw = fs.readFileSync(this.keyPath);
+      if (raw.length === 32) {
+        this.key = raw;
+        return raw;
+      }
+    } catch {
+      /* not present yet — generate below */
+    }
+    const key = crypto.randomBytes(32);
+    fs.mkdirSync(path.dirname(this.keyPath), { recursive: true });
+    fs.writeFileSync(this.keyPath, key, { encoding: "utf8", mode: 0o600 });
+    this.key = key;
+    return key;
+  }
+
+  encrypt(plaintext: string): string {
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv("aes-256-gcm", this.getKey(), iv);
+    const encrypted = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
+    const tag = cipher.getAuthTag();
+    return `${FALLBACK_PREFIX}${iv.toString("base64")}.${tag.toString("base64")}.${encrypted.toString("base64")}`;
+  }
+
+  decrypt(payload: string): string {
+    const parts = payload.split(".");
+    if (parts.length !== 4 || parts[0] !== FALLBACK_PREFIX.slice(0, -1)) {
+      throw new Error("Invalid fallback credential format");
+    }
+    const [, ivB64, tagB64, dataB64] = parts;
+    const decipher = crypto.createDecipheriv("aes-256-gcm", this.getKey(), Buffer.from(ivB64, "base64"));
+    decipher.setAuthTag(Buffer.from(tagB64, "base64"));
+    return Buffer.concat([decipher.update(Buffer.from(dataB64, "base64")), decipher.final()]).toString("utf8");
+  }
+}
+
 export class CredentialVault {
-  constructor(private readonly filePath: string) {}
+  private readonly fallback: FallbackCipher;
+
+  constructor(
+    private readonly filePath: string,
+    keyPath = `${filePath}.key`,
+  ) {
+    this.fallback = new FallbackCipher(keyPath);
+  }
 
   private read(): VaultFile {
     try {
@@ -43,17 +104,29 @@ export class CredentialVault {
     }
   }
 
-  private assertAvailable(): void {
-    if (!safeStorage.isEncryptionAvailable()) {
-      throw new Error("OS credential encryption is unavailable; channel credentials were not persisted");
+  private encrypt(value: Record<string, unknown>): string {
+    const plaintext = JSON.stringify(value);
+    if (safeStorage.isEncryptionAvailable()) {
+      return safeStorage.encryptString(plaintext).toString("base64");
     }
+    return this.fallback.encrypt(plaintext);
+  }
+
+  private decrypt(encrypted: string): string {
+    if (encrypted.startsWith(FALLBACK_PREFIX)) {
+      return this.fallback.decrypt(encrypted);
+    }
+    // Legacy safeStorage payload (no prefix).
+    if (!safeStorage.isEncryptionAvailable()) {
+      throw new Error("This credential was encrypted with OS keyring support, which is unavailable in this session");
+    }
+    return safeStorage.decryptString(Buffer.from(encrypted, "base64"));
   }
 
   get(key: string): Record<string, unknown> | null {
-    this.assertAvailable();
     const encrypted = this.read().entries[validateKey(key)];
     if (!encrypted) return null;
-    const plaintext = safeStorage.decryptString(Buffer.from(encrypted, "base64"));
+    const plaintext = this.decrypt(encrypted);
     const parsed = JSON.parse(plaintext) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
       throw new Error("Invalid channel credential payload");
@@ -61,10 +134,8 @@ export class CredentialVault {
   }
 
   set(key: string, value: Record<string, unknown>): void {
-    this.assertAvailable();
     const data = this.read();
-    const encrypted = safeStorage.encryptString(JSON.stringify(value));
-    data.entries[validateKey(key)] = encrypted.toString("base64");
+    data.entries[validateKey(key)] = this.encrypt(value);
     this.write(data);
   }
 
