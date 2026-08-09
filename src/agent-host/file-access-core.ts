@@ -37,7 +37,15 @@ export function canonicalPath(filePath: string, useWindowsRules: boolean): strin
 
 export function isFilePathAllowed(target: string, allowedRoots: ReadonlySet<string>): boolean {
   for (const root of allowedRoots) {
-    const useWindowsRules = isWindowsAbsolutePath(target) || isWindowsAbsolutePath(root);
+    const targetUsesWindowsRules = isWindowsAbsolutePath(target);
+    const rootUsesWindowsRules = isWindowsAbsolutePath(root);
+    const targetIsPosixAbsolute = target.startsWith("/") && !target.startsWith("//");
+    const rootIsPosixAbsolute = root.startsWith("/") && !root.startsWith("//");
+    if ((targetUsesWindowsRules && rootIsPosixAbsolute) || (rootUsesWindowsRules && targetIsPosixAbsolute)) {
+      continue;
+    }
+
+    const useWindowsRules = targetUsesWindowsRules || rootUsesWindowsRules;
     const separator = useWindowsRules ? "\\" : path.sep;
     const normalized = canonicalPath(target, useWindowsRules);
     const normalizedRoot = canonicalPath(root, useWindowsRules);

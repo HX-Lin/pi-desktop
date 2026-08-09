@@ -16,7 +16,7 @@ Local-first · No local server · Cross-platform
 
 **English** · [简体中文](./README.md)
 
-[Screenshots](#screenshots) · [Features](#features) · [Quick start](#quick-start) · [Architecture](#architecture) · [Contributing](#contributing) · [Roadmap](#roadmap)
+[Download v0.1.6](https://github.com/DLYZZT/pi-desktop/releases/tag/v0.1.6) · [Screenshots](#screenshots) · [Features](#features) · [Quick start](#quick-start) · [Architecture](#architecture) · [Changelog](https://github.com/DLYZZT/pi-desktop/releases) · [Roadmap](#roadmap)
 
 </div>
 
@@ -51,19 +51,36 @@ Local-first · No local server · Cross-platform
 - Attach images, run slash commands, and reference project files with `@`
 - Keep chat and composer content aligned to one reading width, with a mouse- and keyboard-resizable file panel that remembers its width
 
+### A built-in browser shared by the user and Agent
+
+- Run real Chromium pages in a right-side Electron `WebContentsView`, with multiple tabs, temporary or persistent profiles, signed-in state, downloads, uploads, and proxy support
+- Give the Agent separate Browser read/interact grants for navigation, structured snapshots, screenshots, clicks, typing, keys, and waits; the main window prompts on first use, and coding permissions never enable browsing implicitly
+- Let the user and Agent operate the same page, with immediate user takeover and local policy or confirmation for submissions, downloads, uploads, permissions, and external protocols
+- Manage global and per-session permanent permissions in Settings while authorization dialogs create temporary grants only for the current session; one local, launch-only switch controls Advanced Browser Mode
+- Advanced Browser Mode combines consistent UA/Client Hints identity, trusted input, full CDP network capture and confirmed write replay, the JavaScript experience library, and dedicated advanced Profiles; Agent tools neither accept nor return cookie values
+- Label private-network protection as best-effort; Strict mode fails closed until an enforcing network sandbox is deployed
+
 ### A project-focused file experience
 
 - Select project directories natively and manage Git branches and worktrees
 - Browse project files, open multiple tabs, download files, or reference them in prompts
-- Preview Markdown, syntax-highlighted code, Mermaid, KaTeX, and Word (`.docx`) documents
+- Render syntax-highlighted code, Mermaid, and KaTeX in Agent responses and Markdown files, and preview Word (`.docx`) documents
 - Keep sessions aligned with the project through file watching and Git status awareness
 
 ### Unified model and extension management
 
-- Manage model providers and model configurations
+- Bundle Pi Coding Agent 0.84.0 and manage model providers and model configurations
+- Prefer the local model directory when sessions start; explicitly refresh the remote directory when needed while preserving cached models across offline, timeout, or partial-provider failures
 - Sign in through browser-based OAuth flows
-- Search for, install, and configure Skills
+- Search for, install, and configure Skills; normal installs keep npm's default concurrency, with one isolated-cache retry for network, timeout, or cache-lock failures
 - Manage Plugins while continuing to use the Pi Agent extension ecosystem
+
+### Cross-platform developer tool management
+
+- Discover and verify the user's existing Node.js/npm, Python, uv, Git/Bash, Bun, and jq installations, including common locations missing from a GUI launch PATH
+- Give Skills, Plugins, Agent Bash, Git/worktree operations, and search tools one consistent set of absolute paths and per-process environments
+- With explicit user confirmation, install Node.js LTS, CPython, uv, PortableGit, Bun, and jq into private application storage without changing the system PATH, shell profile, or registry
+- Bundle manifest-verified ripgrep and fd binaries for the target platform so basic search remains available offline
 
 ### WeChat, Telegram, and Feishu/Lark channels
 
@@ -88,7 +105,9 @@ Local-first · No local server · Cross-platform
 
 ### Use a desktop build
 
-Pi Agent Desktop bundles the Pi Coding Agent runtime. Regular users do not need to install the Pi CLI, Pi Coding Agent, Node.js, or npm separately. Install the desktop application, configure a model provider, and start working.
+The latest stable version is [v0.1.6](https://github.com/DLYZZT/pi-desktop/releases/tag/v0.1.6), with builds for macOS Apple Silicon and Intel, Windows x64, and Linux x64.
+
+Pi Agent Desktop v0.1.6 bundles the Pi Coding Agent 0.84.0 runtime. Regular users do not need to install the Pi CLI, Pi Coding Agent, Node.js, or npm just to use the Agent. When a Skill, Plugin, or Agent script needs additional developer tools, the application first reuses healthy system installations and can install private runtimes after explicit user confirmation.
 
 The application reads sessions and configuration from `~/.pi/agent/`. If you already use the Pi CLI, your existing data is available without migration. The desktop application also works if you have never used the CLI.
 
@@ -132,10 +151,13 @@ flowchart LR
     Main["Electron Main<br/>Window · tray · protocol · Host supervision"]
     Host["Agent Host / utilityProcess<br/>Pi Agent · sessions · files · configuration"]
     UI["Renderer<br/>React 19 · Vite"]
+    Browser["Main-owned WebContentsView<br/>Remote pages · profiles · network policy"]
     Data["~/.pi/agent/<br/>Sessions · models · configuration"]
 
     Main --> Host
     Main --> UI
+    Main --> Browser
+    Host -->|"Revisioned Browser RPC"| Main
     UI <-->|"Typed MessagePort IPC"| Host
     Host <--> Data
 ```
@@ -143,6 +165,7 @@ flowchart LR
 - **Main** manages the window lifecycle, menus, tray, notifications, software updates, custom protocols, and Agent Host supervision
 - **Agent Host** runs Pi Coding Agent in an isolated `utilityProcess` and handles sessions, files, configuration, and extensions
 - **Renderer** hosts the React UI and communicates only through controlled preload bridges
+- **Browser View** loads remote pages only in sandboxed `WebContentsView` instances created by Main, without the app preload, Node.js, or the main Renderer bridge
 - **No local service** means production does not listen on TCP ports or bundle a web server
 
 ## Data, security, and privacy
@@ -151,6 +174,7 @@ flowchart LR
 - The application does not open an additional local network port for UI communication
 - The Renderer runs in the Electron sandbox with a strict Content Security Policy
 - Preload exposes only controlled bridge APIs, and TypeScript contracts constrain Host RPC
+- Agent Browser tools and Advanced Browser Mode are off by default; Main validates the persistent policy, temporary session grant, lease, and policy revision before any target-tool side effect
 - The update client uses only the public GitHub Release configuration embedded in production builds; it accepts neither update URLs nor release credentials from the Renderer
 - WeChat and Telegram use outbound-only long polling, while Feishu/Lark uses an outbound WebSocket; none opens a webhook or local listener
 - Model providers determine how model request data is processed; review the privacy policy of every provider you configure
@@ -159,19 +183,20 @@ flowchart LR
 
 ### Common commands
 
-| Command                      | Description                                                          |
-| ---------------------------- | -------------------------------------------------------------------- |
-| `npm run dev`                | Start Vite, Main process build watch, and Electron                   |
-| `npm run typecheck`          | Run TypeScript type checking                                         |
-| `npm run test`               | Run the automated test suite                                         |
-| `npm run check:contract`     | Verify coverage between API methods and Host handlers                |
-| `npm run smoke`              | Run Electron smoke tests                                             |
-| `npm run verify`             | Run the complete pre-commit quality gate                             |
-| `npm run build`              | Build Main, preload, and Renderer                                    |
-| `npm run pack`               | Generate the unpacked application directory                          |
-| `npm run dist`               | Build every configured architecture for this platform                |
-| `npm run dist:mac:signed`    | Build a Developer ID-signed package for the current Mac architecture |
-| `npm run dist:mac:notarized` | Build a signed and Apple-notarized macOS package                     |
+| Command                         | Description                                                          |
+| ------------------------------- | -------------------------------------------------------------------- |
+| `npm run dev`                   | Start Vite, Main process build watch, and Electron                   |
+| `npm run typecheck`             | Run TypeScript type checking                                         |
+| `npm run test`                  | Run the automated test suite                                         |
+| `npm run check:contract`        | Verify coverage between API methods and Host handlers                |
+| `npm run smoke`                 | Run Electron smoke tests                                             |
+| `npm run test:browser-electron` | Run the local Browser Electron integration suite                     |
+| `npm run verify`                | Run the complete pre-commit quality gate                             |
+| `npm run build`                 | Build Main, preload, and Renderer                                    |
+| `npm run pack`                  | Generate the unpacked application directory                          |
+| `npm run dist`                  | Build every configured architecture for this platform                |
+| `npm run dist:mac:signed`       | Build a Developer ID-signed package for the current Mac architecture |
+| `npm run dist:mac:notarized`    | Build a signed and Apple-notarized macOS package                     |
 
 ### Project structure
 
@@ -203,8 +228,9 @@ npm run verify
 - [x] Production Windows x64 Release asset pipeline (currently without code signing)
 - [x] Validate the first Release containing both macOS and Windows production assets (v0.1.1)
 - [x] Implement Main-process stable-release checks, user-approved downloads, restart installation, and update settings
+- [x] Implement the Main-owned WebContentsView browser, demand-driven Agent session authorization, and unified Advanced Browser Mode
 - [x] Validate updater-enabled baseline-to-target upgrades end to end on macOS and Windows
-- [ ] Expanded cross-platform E2E and pre-release testing
+- [x] Production-startup E2E and pre-release checks for macOS arm64/x64, Windows x64, and Linux x64 packages
 
 ## Relationship to the Pi ecosystem
 

@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { CredentialSynchronizationError } from "@earendil-works/pi-coding-agent";
 import { build } from "esbuild";
 
 const root = path.resolve(import.meta.dirname, "..", "..");
@@ -53,11 +55,13 @@ async function captureHandlers() {
 
 test("registerHandlers exposes every contract method exactly once", async () => {
   const { handlers } = await captureHandlers();
-  assert.equal(Object.keys(handlers).length, 69);
+  assert.equal(Object.keys(handlers).length, 73);
   for (const method of [
     "host.ping",
     "host.toolchain",
     "sessions.list",
+    "sessions.contextPage",
+    "sessions.entryContent",
     "worktrees.list",
     "git.status",
     "agent.state",
@@ -67,6 +71,8 @@ test("registerHandlers exposes every contract method exactly once", async () => 
     "files.download",
     "files.write",
     "models.list",
+    "models.refresh",
+    "models.refreshCancel",
     "auth.providers",
     "skills.list",
     "prompts.list",
@@ -78,6 +84,53 @@ test("registerHandlers exposes every contract method exactly once", async () => 
   ]) {
     assert.equal(typeof handlers[method], "function", `${method} must be registered`);
   }
+});
+
+test("credential mutation failures distinguish committed state from an unverified mutation", async () => {
+  const { credentialMutationFailure } = await loadHandlersModule();
+  const synchronizationError = new CredentialSynchronizationError("test-provider", "setRuntimeApiKey", undefined, {
+    cause: new Error("secret upstream detail"),
+  });
+
+  const committed = await credentialMutationFailure(
+    {
+      async listCredentials() {
+        return [{ providerId: "test-provider", type: "api_key" }];
+      },
+      async refresh() {
+        throw new Error("secret retry detail");
+      },
+    },
+    "test-provider",
+    { present: true, type: "api_key" },
+    synchronizationError,
+  );
+  assert.deepEqual(committed, {
+    ok: true,
+    synchronized: false,
+    warning: {
+      code: "MODEL_SYNC_FAILED",
+      message: "Credentials were updated, but the local model state could not be refreshed. Retry model refresh.",
+    },
+  });
+  assert.doesNotMatch(JSON.stringify(committed), /secret/);
+
+  await assert.rejects(
+    credentialMutationFailure(
+      {
+        async listCredentials() {
+          return [];
+        },
+        async refresh() {
+          throw new Error("must not refresh");
+        },
+      },
+      "test-provider",
+      { present: true, type: "api_key" },
+      synchronizationError,
+    ),
+    (error) => error?.code === "INTERNAL" && !String(error?.message).includes("secret"),
+  );
 });
 
 test("file, git, worktree, skill, plugin, and system handlers return contract-shaped results", async (t) => {
@@ -209,6 +262,33 @@ test("session, model configuration, and auth handlers isolate state and preserve
   await assert.rejects(handlers["modelsConfig.set"]({}), (error) => error.code === "BAD_REQUEST");
   assert.deepEqual(await handlers["modelsConfig.set"]({ providers: {} }), { ok: true });
 
+  const v084Config = {
+    providers: {
+      custom: {
+        headers: { Authorization: "Bearer test", "X-Remove-Me": null },
+        models: [
+          {
+            id: "model-one",
+            samplingParams: { temperature: 0.2, thinking_token_budget: 1024 },
+            futureField: { preserved: true },
+          },
+        ],
+      },
+    },
+    futureTopLevel: "preserved",
+  };
+  assert.deepEqual(await handlers["modelsConfig.set"](v084Config), { ok: true });
+  assert.deepEqual(await handlers["modelsConfig.get"](), v084Config);
+
+  const models = await handlers["models.list"]({ cwd: root });
+  assert.equal(models.catalog.source, "offline");
+  const refreshedModels = await handlers["models.refresh"]({ cwd: root, requestId: "offline-test" });
+  assert.equal(refreshedModels.catalog.source, "offline");
+  assert.deepEqual(await handlers["models.refreshCancel"]({ requestId: "offline-test" }), {
+    ok: true,
+    cancelled: false,
+  });
+
   const invalidModelTest = await handlers["modelsConfig.test"]({});
   assert.deepEqual(invalidModelTest, { ok: false, error: "providerName is required" });
 
@@ -217,13 +297,19 @@ test("session, model configuration, and auth handlers isolate state and preserve
   const allProviders = await handlers["auth.allProviders"]();
   assert.equal(Array.isArray(allProviders.providers), true);
 
-  assert.deepEqual(await handlers["auth.setApiKey"]({ provider: "openai", key: "secret" }), { ok: true });
+  assert.deepEqual(await handlers["auth.setApiKey"]({ provider: "openai", key: "secret" }), {
+    ok: true,
+    synchronized: true,
+  });
   await assert.rejects(
     handlers["auth.setApiKey"]({ provider: "amazon-bedrock", key: "not-a-bearer-token" }),
     (error) => error.code === "BAD_REQUEST" && /interactive, multi-field/.test(error.message),
   );
-  assert.deepEqual(await handlers["auth.deleteApiKey"]({ provider: "openai" }), { ok: true });
-  assert.deepEqual(await handlers["auth.logout"]({ provider: "openai" }), { ok: true });
+  assert.deepEqual(await handlers["auth.deleteApiKey"]({ provider: "openai" }), {
+    ok: true,
+    synchronized: true,
+  });
+  assert.deepEqual(await handlers["auth.logout"]({ provider: "openai" }), { ok: true, synchronized: true });
   assert.deepEqual(await handlers["auth.loginCancel"]({ provider: "handler-test" }), { ok: true });
   await assert.rejects(
     handlers["auth.loginSubmit"]({ provider: "one", token: "two-token", code: "code" }),
@@ -269,5 +355,125 @@ test("files.write saves content with path-safety checks", async (t) => {
   await assert.rejects(
     handlers["files.write"]({ path: target, content: "x".repeat(10 * 1024 * 1024 + 1) }),
     (error) => error.code === "BAD_REQUEST",
+  );
+});
+
+test("sessions.get returns the contract shape without rescanning known session paths", async (t) => {
+  const sessionDirectory = path.join(process.env.PI_CODING_AGENT_SESSION_DIR, "contract-fixture");
+  mkdirSync(sessionDirectory, { recursive: true });
+  const sessionId = "contract-session";
+  const sessionPath = path.join(sessionDirectory, `2026-08-06T00-00-00-000Z_${sessionId}.jsonl`);
+  const entries = [
+    {
+      type: "session",
+      version: 3,
+      id: sessionId,
+      timestamp: "2026-08-06T00:00:00.000Z",
+      cwd: root,
+    },
+    {
+      type: "message",
+      id: "user-one",
+      parentId: null,
+      timestamp: "2026-08-06T00:00:01.000Z",
+      message: { role: "user", content: "hello", timestamp: 1_786_060_801_000 },
+    },
+    {
+      type: "message",
+      id: "assistant-one",
+      parentId: "user-one",
+      timestamp: "2026-08-06T00:00:02.000Z",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "hi" }],
+        api: "test",
+        provider: "test",
+        model: "test",
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { total: 0 } },
+        stopReason: "stop",
+        timestamp: 1_786_060_802_000,
+      },
+    },
+    {
+      type: "message",
+      id: "user-two",
+      parentId: "assistant-one",
+      timestamp: "2026-08-06T00:00:03.000Z",
+      message: { role: "user", content: "second", timestamp: 1_786_060_803_000 },
+    },
+    {
+      type: "message",
+      id: "assistant-two",
+      parentId: "user-two",
+      timestamp: "2026-08-06T00:00:04.000Z",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "second answer" }],
+        api: "test",
+        provider: "test",
+        model: "test",
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { total: 0 } },
+        stopReason: "stop",
+        timestamp: 1_786_060_804_000,
+      },
+    },
+  ];
+  writeFileSync(sessionPath, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`, "utf8");
+
+  const { handlers } = await captureHandlers();
+  const listed = await handlers["sessions.list"]();
+  assert.equal(
+    listed.sessions.some((session) => session.id === sessionId),
+    true,
+  );
+
+  const originalListAll = SessionManager.listAll;
+  SessionManager.listAll = async () => {
+    throw new Error("global scan must not run");
+  };
+  t.after(() => {
+    SessionManager.listAll = originalListAll;
+  });
+
+  const detail = await handlers["sessions.get"]({ id: sessionId });
+  assert.deepEqual(Object.keys(detail).sort(), ["context", "filePath", "info", "leafId", "sessionId", "tree"]);
+  assert.equal(detail.sessionId, sessionId);
+  assert.equal(detail.filePath, sessionPath);
+  assert.equal(detail.info.id, sessionId);
+  assert.equal(detail.info.messageCount, 4);
+  assert.equal(detail.info.firstMessage, "hello");
+  assert.deepEqual(detail.context.entryIds, ["user-one", "assistant-one", "user-two", "assistant-two"]);
+  assert.equal(detail.context.messages.length, 4);
+
+  const paged = await handlers["sessions.get"]({ id: sessionId, historyWindow: { maxTurns: 1, maxBytes: 64 * 1024 } });
+  assert.deepEqual(paged.context.entryIds, ["user-two", "assistant-two"]);
+  assert.equal(paged.context.truncatedBefore, true);
+  const older = await handlers["sessions.contextPage"]({ id: sessionId, cursor: paged.context.previousCursor });
+  assert.deepEqual(older.context.entryIds, ["user-one", "assistant-one"]);
+  const cursorPayload = JSON.parse(Buffer.from(paged.context.previousCursor, "base64url").toString("utf8"));
+  const staleCursor = Buffer.from(
+    JSON.stringify({ ...cursorPayload, historyRevision: "stale-revision" }),
+    "utf8",
+  ).toString("base64url");
+  await assert.rejects(
+    handlers["sessions.contextPage"]({ id: sessionId, cursor: staleCursor }),
+    (error) => error.code === "STALE_CURSOR",
+  );
+  await assert.rejects(
+    handlers["sessions.contextPage"]({ id: sessionId, cursor: "invalid" }),
+    (error) => error.code === "BAD_REQUEST",
+  );
+  assert.deepEqual(await handlers["sessions.entryContent"]({ id: sessionId, entryId: "assistant-two" }), {
+    content: { type: "text", text: "second answer" },
+    deferredContent: {
+      entryId: "assistant-two",
+      blockIndex: 0,
+      originalBytes: Buffer.byteLength(JSON.stringify({ type: "text", text: "second answer" }), "utf8"),
+      contentType: "text",
+    },
+  });
+  await assert.rejects(
+    handlers["sessions.entryContent"]({ id: sessionId, entryId: "another-session-entry", blockIndex: 0 }),
+    (error) => error.code === "NOT_FOUND",
   );
 });

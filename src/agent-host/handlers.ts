@@ -19,6 +19,7 @@ import { homedir, tmpdir } from "os";
 import path from "path";
 import {
   DefaultResourceLoader,
+  CredentialSynchronizationError,
   ModelRuntime,
   SessionManager,
   createAgentSessionServices,
@@ -28,10 +29,25 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { getSupportedThinkingLevels, type AuthInteraction } from "@earendil-works/pi-ai";
 import type { RpcServer } from "../contract/rpc";
-import { RpcError } from "../contract/types";
+import {
+  RpcError,
+  type HistoryWindow,
+  type ModelCatalogStatus,
+  type ModelsListResult,
+  type SessionDetail,
+  type SessionRuntimeState,
+} from "../contract/types";
+import type { SessionTreeNode } from "../shared/types";
 import { allowFileRoot, getAllowedFileRoots, invalidateAllowedRootsCache, isFilePathAllowed } from "./file-access";
 import { getRpcSession, getRunningRpcSessionIds, startRpcSession, subscribeRunningSessions } from "./rpc-manager";
-import { buildSessionContext, invalidateSessionPathCache, listAllSessions, resolveSessionPath } from "./session-reader";
+import {
+  buildSessionContext,
+  buildSessionInfoFromManager,
+  getSessionIndexMetrics,
+  invalidateSessionPathCache,
+  listAllSessions,
+  resolveSessionPath,
+} from "./session-reader";
 import { isFilePathReferencedBySession } from "./session-file-references";
 import {
   addWorktree,
@@ -53,15 +69,32 @@ import {
   getImageMime,
 } from "../shared/file-types";
 import { createFileWatchService } from "./file-watch";
+import { callMain } from "./parent-rpc";
 import { createAuthLoginService, resolveLoginCode } from "./auth-login";
-import { getSharedModelRuntime, reloadSharedModelRuntimeConfig } from "./model-runtime";
+import { getSharedModelRuntime, modelCatalogRefreshCoordinator, reloadSharedModelRuntimeConfig } from "./model-runtime";
 import { applyPluginAction, readPlugins } from "./plugins-service";
 import { installSkill, searchSkills } from "./skills-service";
-import { projectTreeForResponse } from "./project-tree";
+import { projectSessionTreeForResponse } from "./project-tree";
 import type { PromptRecord, PromptScope } from "../shared/api-types";
 import { ChannelManager } from "./channels/channel-manager";
 import { ToolchainError } from "../shared/toolchains/errors";
 import { toolchainRuntime } from "./toolchain-runtime";
+import {
+  logSessionPerformance,
+  resolveSessionTraceId,
+  roundSessionMilliseconds,
+  sessionPerformanceBytesEnabled,
+} from "./session-performance";
+import {
+  buildHistoryRevision,
+  buildSessionHistoryPage,
+  decodeHistoryCursor,
+  readSessionEntryContent,
+  StaleHistoryCursorError,
+} from "./session-history";
+import { getSessionContentSnapshot, invalidateSessionContent } from "./session-content-cache";
+import { sessionIndex } from "./session-index";
+import { credentialStateMatches, recoverCommittedCredential, type CredentialTarget } from "./credential-sync";
 
 const IGNORED_NAMES = new Set([
   "node_modules",
@@ -127,6 +160,20 @@ function getLanguage(filePath: string): string {
   if (base === "makefile" || base === "gnumakefile") return "makefile";
   const ext = base.split(".").pop() ?? "";
   return EXT_TO_LANGUAGE[ext] ?? "text";
+}
+
+async function emitIndexedSessionChange(server: RpcServer, sessionId: string, cwd: string | null): Promise<void> {
+  try {
+    const filePath = await resolveSessionPath(sessionId);
+    const session = filePath ? await sessionIndex.refreshPath(filePath) : null;
+    if (session) {
+      server.emit("sessions.changed", session.id, { cwd: session.cwd, sessionId: session.id, session });
+      return;
+    }
+  } catch (error) {
+    console.error("[agent-host] failed to refresh changed session:", error);
+  }
+  server.emit("sessions.changed", "*", { cwd, fullRefresh: true });
 }
 
 async function assertPathAllowed(target: string, sourceSessionId?: string): Promise<void> {
@@ -235,6 +282,68 @@ function filterByExactEnabledModels<T extends { id: string; provider: string }>(
   return visible.length > 0 ? visible : available;
 }
 
+export async function credentialMutationFailure(
+  modelRuntime: ModelRuntime,
+  providerId: string,
+  target: CredentialTarget,
+  error: unknown,
+) {
+  if (error instanceof CredentialSynchronizationError) {
+    const recovered = await recoverCommittedCredential(modelRuntime, providerId, target);
+    if (recovered) {
+      if (!recovered.synchronized) {
+        console.warn(`[agent-host] credential ${error.operation} committed for ${providerId}; model sync retry failed`);
+      }
+      return recovered;
+    }
+    throw new RpcError({ code: "INTERNAL", message: `Credential change for ${providerId} could not be verified` });
+  }
+  throw new RpcError({ code: "BAD_REQUEST", message: error instanceof Error ? error.message : String(error) });
+}
+
+function resolveModelsCwd(params: { cwd?: string } | void): string {
+  const cwd = params?.cwd || process.cwd();
+  try {
+    const st = statSync(cwd);
+    if (!st.isDirectory()) throw new Error("not-directory");
+  } catch {
+    throw new RpcError({ code: "BAD_REQUEST", message: `Directory does not exist: ${cwd}` });
+  }
+  return cwd;
+}
+
+async function projectModelsList(
+  modelRuntime: ModelRuntime,
+  settings: SettingsManager,
+  catalog: ModelCatalogStatus,
+): Promise<ModelsListResult> {
+  const available = [...(await modelRuntime.getAvailable())];
+  const enabledModels = settings.getEnabledModels();
+  const visible = filterByExactEnabledModels(available, enabledModels);
+  const models = visible
+    .map((model) => ({ id: model.id, name: model.name, provider: model.provider }))
+    .sort((a, b) => a.name.localeCompare(b.name) || a.provider.localeCompare(b.provider));
+
+  const nameMap: Record<string, string> = {};
+  const thinkingLevels: Record<string, string[]> = {};
+  const thinkingLevelMaps: Record<string, Record<string, string | null>> = {};
+  for (const model of visible) {
+    const key = `${model.provider}:${model.id}`;
+    nameMap[key] = model.name;
+    thinkingLevels[key] = getSupportedThinkingLevels(model);
+    if (model.thinkingLevelMap) thinkingLevelMaps[key] = model.thinkingLevelMap;
+  }
+
+  let defaultModel: { provider: string; modelId: string } | null = null;
+  const provider = settings.getDefaultProvider();
+  const modelId = settings.getDefaultModel();
+  if (provider && modelId && visible.some((model) => model.provider === provider && model.id === modelId)) {
+    defaultModel = { provider, modelId };
+  }
+
+  return { models, defaultModel, thinkingLevels, thinkingLevelMaps, nameMap, catalog };
+}
+
 export function registerHandlers(server: RpcServer): () => Promise<void> {
   const fileWatch = createFileWatchService(server);
   const authLogin = createAuthLoginService(server);
@@ -278,53 +387,183 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
     },
 
     "sessions.list": async () => {
-      const sessions = await listAllSessions();
-      return { sessions, runningSessionIds: getRunningRpcSessionIds() };
+      const traceId = resolveSessionTraceId();
+      const startedAt = performance.now();
+      try {
+        const sessions = await listAllSessions();
+        const indexMetrics = getSessionIndexMetrics();
+        logSessionPerformance("sessions.list", {
+          traceId,
+          ok: true,
+          totalMs: roundSessionMilliseconds(performance.now() - startedAt),
+          sessionsReturned: sessions.length,
+          filesDiscovered: indexMetrics.filesDiscovered,
+          filesParsed: indexMetrics.filesParsed,
+          filesReused: indexMetrics.filesReused,
+          invalidFiles: indexMetrics.invalidFiles,
+          indexRefreshMs: indexMetrics.totalMs,
+        });
+        return { sessions, runningSessionIds: getRunningRpcSessionIds() };
+      } catch (error) {
+        logSessionPerformance("sessions.list", {
+          traceId,
+          ok: false,
+          totalMs: roundSessionMilliseconds(performance.now() - startedAt),
+          error: error instanceof Error ? error.name : "UnknownError",
+        });
+        throw error;
+      }
     },
 
     "sessions.get": async (params) => {
-      const { id, includeState, limit } = params as { id: string; includeState?: boolean; limit?: number };
-      const filePath = await resolveSessionPath(id);
-      if (!filePath) throw new RpcError({ code: "NOT_FOUND", message: "Session not found" });
+      const {
+        id,
+        includeState,
+        traceId: requestedTraceId,
+        historyWindow,
+      } = params as {
+        id: string;
+        includeState?: boolean;
+        traceId?: string;
+        historyWindow?: HistoryWindow;
+      };
+      const traceId = resolveSessionTraceId(requestedTraceId);
+      const startedAt = performance.now();
+      let stateMs = 0;
+      try {
+        const agentStatePromise: Promise<SessionDetail["agentState"]> = (async () => {
+          if (!includeState) return undefined;
+          const stateStartedAt = performance.now();
+          const existing = getRpcSession(id);
+          const result = existing?.isAlive()
+            ? { running: true, state: (await existing.send({ type: "get_state" })) as SessionRuntimeState }
+            : { running: false };
+          stateMs = performance.now() - stateStartedAt;
+          return result;
+        })();
 
-      const sm = SessionManager.open(filePath);
-      const entries = sm.getEntries() as never;
-      const leafId = sm.getLeafId();
-      const tree = projectTreeForResponse(sm.getTree() as never);
-      const context = buildSessionContext(entries, leafId, limit);
-      const all = await listAllSessions();
-      const info = all.find((s) => s.id === id);
+        const resolveStartedAt = performance.now();
+        const filePath = await resolveSessionPath(id);
+        const resolvePathMs = performance.now() - resolveStartedAt;
+        if (!filePath) throw new RpcError({ code: "NOT_FOUND", message: "Session not found" });
 
-      let agentState: { running: boolean; state?: unknown } | undefined;
-      if (includeState) {
-        const existing = getRpcSession(id);
-        if (existing?.isAlive()) {
-          const state = await existing.send({ type: "get_state" });
-          agentState = { running: true, state };
-        } else {
-          agentState = { running: false };
-        }
+        const openStartedAt = performance.now();
+        const { manager: sm, entries } = getSessionContentSnapshot(filePath);
+        const openMs = performance.now() - openStartedAt;
+
+        const contextStartedAt = performance.now();
+        const leafId = sm.getLeafId();
+        const tree = projectSessionTreeForResponse(sm.getTree() as never) as SessionTreeNode[];
+        const historyRevision = buildHistoryRevision(filePath, id);
+        const context = buildSessionHistoryPage({ entries, leafId, historyWindow, historyRevision });
+        const contextMs = performance.now() - contextStartedAt;
+
+        const infoStartedAt = performance.now();
+        const [info, agentState] = await Promise.all([
+          buildSessionInfoFromManager(filePath, sm, entries),
+          agentStatePromise,
+        ]);
+        const infoMs = performance.now() - infoStartedAt;
+
+        const detail: SessionDetail = {
+          sessionId: id,
+          filePath,
+          info,
+          leafId,
+          tree,
+          context,
+          ...(agentState !== undefined ? { agentState } : {}),
+        };
+        const responseBytes = sessionPerformanceBytesEnabled()
+          ? Buffer.byteLength(JSON.stringify(detail), "utf8")
+          : undefined;
+        logSessionPerformance("sessions.get", {
+          traceId,
+          ok: true,
+          totalMs: roundSessionMilliseconds(performance.now() - startedAt),
+          resolvePathMs: roundSessionMilliseconds(resolvePathMs),
+          openMs: roundSessionMilliseconds(openMs),
+          contextMs: roundSessionMilliseconds(contextMs),
+          infoMs: roundSessionMilliseconds(infoMs),
+          stateMs: roundSessionMilliseconds(stateMs),
+          entryCount: entries.length,
+          messageCount: context.messages.length,
+          fileBytes: statSync(filePath).size,
+          ...(responseBytes === undefined ? {} : { responseBytes }),
+        });
+        return detail;
+      } catch (error) {
+        logSessionPerformance("sessions.get", {
+          traceId,
+          ok: false,
+          totalMs: roundSessionMilliseconds(performance.now() - startedAt),
+          error: error instanceof Error ? error.name : "UnknownError",
+        });
+        throw error;
       }
-
-      // Return flat SessionData shape expected by useAgentSession
-      return {
-        sessionId: id,
-        filePath,
-        info: info ?? null,
-        leafId,
-        tree,
-        context,
-        ...(agentState !== undefined ? { agentState } : {}),
-      } as never;
     },
 
     "sessions.context": async (params) => {
-      const { id, leafId, limit } = params as { id: string; leafId?: string; limit?: number };
+      const { id, leafId, historyWindow } = params as { id: string; leafId?: string; historyWindow?: HistoryWindow };
       const filePath = await resolveSessionPath(id);
       if (!filePath) throw new RpcError({ code: "NOT_FOUND", message: "Session not found" });
-      const sm = SessionManager.open(filePath);
-      const context = buildSessionContext(sm.getEntries() as never, leafId, limit);
-      return { context: context as never };
+      const { entries } = getSessionContentSnapshot(filePath);
+      const context = buildSessionHistoryPage({
+        entries,
+        leafId,
+        historyWindow,
+        historyRevision: buildHistoryRevision(filePath, id),
+      });
+      return { context };
+    },
+
+    "sessions.contextPage": async (params) => {
+      const { id, cursor, maxTurns, maxBytes } = params as {
+        id: string;
+        cursor: string;
+        maxTurns?: number;
+        maxBytes?: number;
+      };
+      const filePath = await resolveSessionPath(id);
+      if (!filePath) throw new RpcError({ code: "NOT_FOUND", message: "Session not found" });
+      const { entries } = getSessionContentSnapshot(filePath);
+      try {
+        const context = buildSessionHistoryPage({
+          entries,
+          historyWindow: { maxTurns, maxBytes },
+          historyRevision: buildHistoryRevision(filePath, id),
+          cursor: decodeHistoryCursor(cursor),
+        });
+        return { context };
+      } catch (error) {
+        if (error instanceof StaleHistoryCursorError) {
+          throw new RpcError({ code: "STALE_CURSOR", message: error.message });
+        }
+        if (error instanceof Error && error.message === "Invalid session history cursor") {
+          throw new RpcError({ code: "BAD_REQUEST", message: error.message });
+        }
+        throw error;
+      }
+    },
+
+    "sessions.entryContent": async (params) => {
+      const { id, entryId, blockIndex = 0 } = params as { id: string; entryId: string; blockIndex?: number };
+      const filePath = await resolveSessionPath(id);
+      if (!filePath) throw new RpcError({ code: "NOT_FOUND", message: "Session not found" });
+      const { entries } = getSessionContentSnapshot(filePath);
+      const content = readSessionEntryContent(entries, entryId, blockIndex);
+      if (content === null) {
+        throw new RpcError({ code: "NOT_FOUND", message: "Session entry content not found" });
+      }
+      return {
+        content,
+        deferredContent: {
+          entryId,
+          blockIndex,
+          originalBytes: Buffer.byteLength(JSON.stringify(content), "utf8"),
+          contentType: content.type,
+        },
+      };
     },
 
     "sessions.export": async (params) => {
@@ -376,8 +615,15 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
           message: e instanceof Error ? e.message : String(e),
         });
       }
+      invalidateSessionContent(filePath);
+      const deletedSession = sessionIndex.removePath(filePath);
       invalidateSessionPathCache(id);
-      server.emit("sessions.changed", "*", { cwd: null });
+      void callMain("browser.sessionEnded", { sessionId: id }).catch(() => undefined);
+      server.emit("sessions.changed", id, {
+        cwd: deletedSession?.cwd ?? null,
+        sessionId: id,
+        deleted: true,
+      });
       return { ok: true as const };
     },
 
@@ -395,8 +641,9 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
         const sm = SessionManager.open(filePath);
         // ISSUE-014: SDK uses appendSessionInfo, not setSessionName
         sm.appendSessionInfo(name.trim());
+        invalidateSessionContent(filePath);
       }
-      server.emit("sessions.changed", "*", { cwd: null });
+      await emitIndexedSessionChange(server, id, null);
       return { ok: true as const };
     },
 
@@ -497,13 +744,12 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
       }
 
       if (rest.type === "ensure_session") {
-        server.emit("sessions.changed", "*", { cwd });
         return { sessionId: realSessionId, data: null };
       }
 
       const command = rest.type ? rest : { type: "prompt", message: body.message ?? "" };
       const data = await session.send(command as Record<string, unknown>);
-      server.emit("sessions.changed", "*", { cwd });
+      await emitIndexedSessionChange(server, realSessionId, cwd);
       return { sessionId: realSessionId, data };
     },
 
@@ -879,49 +1125,33 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
     },
 
     "models.list": async (params) => {
-      const cwd = (params as { cwd?: string } | void)?.cwd || process.cwd();
-      try {
-        const st = statSync(cwd);
-        if (!st.isDirectory()) {
-          throw new RpcError({ code: "BAD_REQUEST", message: `Not a directory: ${cwd}` });
-        }
-      } catch (e) {
-        if (e instanceof RpcError) throw e;
-        throw new RpcError({ code: "BAD_REQUEST", message: `Directory does not exist: ${cwd}` });
-      }
-
+      const cwd = resolveModelsCwd(params as { cwd?: string } | void);
       const agentDir = getAgentDir();
       const services = await createAgentSessionServices({ cwd, agentDir });
-      const available = [...(await services.modelRuntime.getAvailable())];
-      const settings: SettingsManager = services.settingsManager;
-      const enabledModels = settings.getEnabledModels();
-      const visible = filterByExactEnabledModels(available, enabledModels);
-      const models = visible
-        .map((m: { id: string; name: string; provider: string }) => ({
-          id: m.id,
-          name: m.name,
-          provider: m.provider,
-        }))
-        .sort((a, b) => a.name.localeCompare(b.name) || a.provider.localeCompare(b.provider));
+      return projectModelsList(services.modelRuntime, services.settingsManager, {
+        source: process.env.PI_OFFLINE === undefined ? "cache" : "offline",
+        refreshed: false,
+        aborted: false,
+        warnings: [],
+      });
+    },
 
-      const nameMap: Record<string, string> = {};
-      const thinkingLevels: Record<string, string[]> = {};
-      const thinkingLevelMaps: Record<string, Record<string, string | null>> = {};
-      for (const m of visible) {
-        const key = `${m.provider}:${m.id}`;
-        nameMap[key] = m.name;
-        thinkingLevels[key] = getSupportedThinkingLevels(m);
-        if (m.thinkingLevelMap) thinkingLevelMaps[key] = m.thinkingLevelMap;
+    "models.refresh": async (params) => {
+      const { requestId } = params as { cwd?: string; requestId: string };
+      if (!/^[A-Za-z0-9_-]{1,100}$/.test(requestId)) {
+        throw new RpcError({ code: "BAD_REQUEST", message: "Invalid model refresh request id" });
       }
+      const cwd = resolveModelsCwd(params);
+      const agentDir = getAgentDir();
+      const { services, catalog } = await modelCatalogRefreshCoordinator.refresh(cwd, requestId, (signal) =>
+        createAgentSessionServices({ cwd, agentDir, modelRuntimeSignal: signal }),
+      );
+      return projectModelsList(services.modelRuntime, services.settingsManager, catalog);
+    },
 
-      let defaultModel: { provider: string; modelId: string } | null = null;
-      const provider = settings.getDefaultProvider();
-      const modelId = settings.getDefaultModel();
-      if (provider && modelId && visible.some((m) => m.provider === provider && m.id === modelId)) {
-        defaultModel = { provider, modelId };
-      }
-
-      return { models, defaultModel, thinkingLevels, thinkingLevelMaps, nameMap };
+    "models.refreshCancel": (params) => {
+      const { requestId } = params as { requestId: string };
+      return { ok: true as const, cancelled: modelCatalogRefreshCoordinator.cancel(requestId) };
     },
 
     "modelsConfig.get": () => readModelsJson() as never,
@@ -1119,37 +1349,43 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
       try {
         await modelRuntime.login(provider, "api_key", interaction);
       } catch (error) {
-        throw new RpcError({
-          code: "BAD_REQUEST",
-          message: error instanceof Error ? error.message : String(error),
-        });
+        return credentialMutationFailure(modelRuntime, provider, { present: true, type: "api_key" }, error);
       }
-      const stored = await modelRuntime.listCredentials();
-      if (!stored.some((entry) => entry.providerId === provider && entry.type === "api_key")) {
+      if (!(await credentialStateMatches(modelRuntime, provider, { present: true, type: "api_key" }))) {
         throw new RpcError({
           code: "INTERNAL",
           message: `Key for ${provider} was written but not readable back`,
         });
       }
-      return { ok: true as const };
+      return { ok: true as const, synchronized: true };
     },
 
     "auth.deleteApiKey": async (params) => {
       const { provider } = params as { provider: string };
+      const modelRuntime = await getSharedModelRuntime();
       try {
-        const modelRuntime = await getSharedModelRuntime();
         await modelRuntime.logout(provider);
-      } catch {
-        /* ignore */
+      } catch (error) {
+        return credentialMutationFailure(modelRuntime, provider, { present: false, type: "api_key" }, error);
       }
-      return { ok: true as const };
+      if (!(await credentialStateMatches(modelRuntime, provider, { present: false, type: "api_key" }))) {
+        throw new RpcError({ code: "INTERNAL", message: `Key removal for ${provider} could not be verified` });
+      }
+      return { ok: true as const, synchronized: true };
     },
 
     "auth.logout": async (params) => {
       const { provider } = params as { provider: string };
       const modelRuntime = await getSharedModelRuntime();
-      await modelRuntime.logout(provider);
-      return { ok: true as const };
+      try {
+        await modelRuntime.logout(provider);
+      } catch (error) {
+        return credentialMutationFailure(modelRuntime, provider, { present: false }, error);
+      }
+      if (!(await credentialStateMatches(modelRuntime, provider, { present: false }))) {
+        throw new RpcError({ code: "INTERNAL", message: `Logout for ${provider} could not be verified` });
+      }
+      return { ok: true as const, synchronized: true };
     },
 
     "auth.loginSubmit": async (params) => {
@@ -1350,7 +1586,10 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
     },
   });
 
-  return () => channelManager.shutdown();
+  return async () => {
+    modelCatalogRefreshCoordinator.cancelAll();
+    await channelManager.shutdown();
+  };
 }
 
 /** ISSUE-003: track bindings per wrapper instance, not permanent sessionId set */

@@ -169,12 +169,29 @@ export async function listSessions() {
   return call("sessions.list");
 }
 
-export async function getSession(id: string, includeState?: boolean, limit?: number) {
-  return call("sessions.get", { id, includeState, ...(limit ? { limit } : {}) });
+export async function getSession(
+  id: string,
+  includeState?: boolean,
+  traceId?: string,
+  historyWindow?: ApiParams<"sessions.get">["historyWindow"],
+) {
+  return call("sessions.get", { id, includeState, traceId, historyWindow });
 }
 
-export async function getSessionContext(id: string, leafId?: string, limit?: number) {
-  return call("sessions.context", { id, leafId, ...(limit ? { limit } : {}) });
+export async function getSessionContext(
+  id: string,
+  leafId?: string,
+  historyWindow?: ApiParams<"sessions.context">["historyWindow"],
+) {
+  return call("sessions.context", { id, leafId, historyWindow });
+}
+
+export async function getSessionContextPage(id: string, cursor: string, maxTurns?: number, maxBytes?: number) {
+  return call("sessions.contextPage", { id, cursor, maxTurns, maxBytes });
+}
+
+export async function getSessionEntryContent(id: string, entryId: string, blockIndex?: number) {
+  return call("sessions.entryContent", { id, entryId, blockIndex });
 }
 
 export async function exportSession(id: string, format: "md" | "json" = "md") {
@@ -203,6 +220,14 @@ export async function agentState(sessionId: string) {
 
 export async function listModels(cwd?: string) {
   return call("models.list", cwd ? { cwd } : undefined);
+}
+
+export async function refreshModels(cwd: string | undefined, requestId: string) {
+  return call("models.refresh", { ...(cwd ? { cwd } : {}), requestId });
+}
+
+export async function cancelModelsRefresh(requestId: string) {
+  return call("models.refreshCancel", { requestId });
 }
 
 export async function listWorktrees(projectRoot: string) {

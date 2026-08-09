@@ -5,6 +5,7 @@ import {
   getAgentDir,
   SessionManager,
   type CreateAgentSessionFromServicesOptions,
+  type AgentSessionRuntimeDiagnostic,
 } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "crypto";
 import { cacheSessionPath } from "./session-reader";
@@ -15,6 +16,15 @@ import type { ExtensionUiRequest, ExtensionUiResponse, ExtensionWidgetItem } fro
 import { toolchainRuntime } from "./toolchain-runtime";
 import { createToolchainBashOptions } from "./toolchain-bash";
 import { createDesktopSearchToolDefinitions } from "./toolchain-search";
+import {
+  browserToolNamesForSnapshot,
+  createBrowserToolDefinitions,
+  isBrowserToolName,
+  setBrowserSessionSource,
+} from "./browser-tools";
+import { browserCapabilityRuntime } from "./browser-capability-runtime";
+import { browserAgentRuntime } from "./browser-agent-runtime";
+import { projectExtensionDiagnostics } from "./extension-diagnostics";
 
 // ============================================================================
 // Types
@@ -108,7 +118,7 @@ function withExtensionTools(session: AgentSessionLike, toolNames: string[]): str
   const extensionToolNames = session
     .getAllTools()
     .map((t) => t.name)
-    .filter((name) => !codingToolNames.has(name));
+    .filter((name) => !codingToolNames.has(name) && !isBrowserToolName(name));
 
   return [...new Set([...toolNames, ...extensionToolNames])];
 }
@@ -125,6 +135,7 @@ export class AgentSessionWrapper {
   private pendingUiRequests = new Map<string, AgentEvent>();
   private activeCustomUis = new Map<string, ActiveCustomUi>();
   private extensionStatuses = new Map<string, string>();
+  private runtimeDiagnosticStatuses = new Map<string, string>();
   private extensionWidgets = new Map<string, ExtensionWidgetItem>();
   private extensionWorkingMessage = "Working";
   private extensionWorkingIndicator = "";
@@ -195,6 +206,12 @@ export class AgentSessionWrapper {
     notifyRunningChange();
   }
 
+  syncBrowserToolActivation(): void {
+    const current = this.inner.getActiveToolNames().filter((name) => !isBrowserToolName(name));
+    const browserTools = browserToolNamesForSnapshot(browserCapabilityRuntime.getSnapshot());
+    this.inner.setActiveToolsByName([...new Set([...current, ...browserTools])]);
+  }
+
   private withExternalChannelSource(event: AgentEvent): AgentEvent {
     if (!this.externalTurnChannel || (event.type !== "message_start" && event.type !== "message_end")) return event;
     const message = event.message;
@@ -217,6 +234,12 @@ export class AgentSessionWrapper {
       "</pi-desktop-toolchain>",
     ].join("\n");
     this.applyToolchainSummary();
+  }
+
+  setRuntimeDiagnostics(diagnostics: readonly AgentSessionRuntimeDiagnostic[]): void {
+    this.runtimeDiagnosticStatuses = new Map(
+      projectExtensionDiagnostics(diagnostics).map(({ key, text }) => [key, text]),
+    );
   }
 
   beginExtensionBinding(options: ExtensionBindingOptions = {}): void {
@@ -362,6 +385,8 @@ export class AgentSessionWrapper {
       this.emit({ type: "channel_turn_start", runId: params.runId });
       this.externalTurnActive = true;
       this.externalTurnChannel = params.channel;
+      setBrowserSessionSource(this.inner.sessionManager, "channel");
+      browserAgentRuntime.beginTurn(this.sessionId, "channel");
       this.externalTurnProgress = params.onProgress ?? null;
       try {
         this.inner.sessionManager.appendCustomEntry("pi-desktop-channel-source", {
@@ -402,6 +427,7 @@ export class AgentSessionWrapper {
         this.externalTurnProgress = null;
         this.externalTurnActive = false;
         this.externalTurnChannel = null;
+        setBrowserSessionSource(this.inner.sessionManager, "local");
       }
     });
   }
@@ -466,6 +492,7 @@ export class AgentSessionWrapper {
         // Fire and forget — events come via subscribe
         const promptImages = command.images as Array<{ type: "image"; data: string; mimeType: string }> | undefined;
         const streamingBehavior = command.streamingBehavior as "steer" | "followUp" | undefined;
+        if (!streamingBehavior) browserAgentRuntime.beginTurn(this.sessionId, "local");
         const invokePrompt = () =>
           this.inner.prompt(command.message as string, {
             ...(promptImages?.length ? { images: promptImages } : {}),
@@ -673,12 +700,14 @@ export class AgentSessionWrapper {
         const toolNames = command.toolNames as string[];
         this.setForceEmptySystemPrompt(toolNames.length === 0);
         this.inner.setActiveToolsByName(withExtensionTools(this.inner, toolNames));
+        this.syncBrowserToolActivation();
         this.applyForcedEmptySystemPrompt();
         return null;
       }
 
       case "reload": {
         await this.enqueueTurn(() => this.reloadSessionResources());
+        this.syncBrowserToolActivation();
         return { success: true };
       }
 
@@ -731,6 +760,7 @@ export class AgentSessionWrapper {
   destroy(): void {
     if (!this._alive) return;
     this._alive = false;
+    browserAgentRuntime.clearSession(this.sessionId);
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.unsubscribe?.();
     this.unsubscribe = null;
@@ -750,7 +780,10 @@ export class AgentSessionWrapper {
   }
 
   private getExtensionStatuses(): Array<{ key: string; text: string }> {
-    return Array.from(this.extensionStatuses, ([key, text]) => ({ key, text }));
+    return Array.from(new Map([...this.runtimeDiagnosticStatuses, ...this.extensionStatuses]), ([key, text]) => ({
+      key,
+      text,
+    }));
   }
 
   private setExtensionStatus(key: string, text: string | undefined): void {
@@ -1171,6 +1204,10 @@ export function getRpcSession(sessionId: string): AgentSessionWrapper | undefine
   return getRegistry().get(sessionId);
 }
 
+export function syncBrowserToolsForAllSessions(): void {
+  for (const session of getRegistry().values()) session.syncBrowserToolActivation();
+}
+
 export function getRunningRpcSessionIds(): string[] {
   const ids = new Set<string>();
   for (const [sessionId, session] of getRegistry()) {
@@ -1273,10 +1310,12 @@ export async function startRpcSession(
       executionContext,
       toolchainRuntime,
       services.settingsManager.getShellCommandPrefix(),
+      (command) => browserAgentRuntime.guardBash(sessionManager.getSessionId(), command),
     );
     const customTools = [
       createBashToolDefinition(cwd, bashOptions),
       ...createDesktopSearchToolDefinitions(cwd, executionContext, toolchainRuntime),
+      ...createBrowserToolDefinitions(),
     ] as unknown as NonNullable<CreateAgentSessionFromServicesOptions["customTools"]>;
     const { session: inner } = await createAgentSessionFromServices({
       services,
@@ -1293,6 +1332,7 @@ export async function startRpcSession(
     }
 
     const wrapper = new AgentSessionWrapper(inner);
+    wrapper.setRuntimeDiagnostics(services.diagnostics);
     wrapper.setToolchainSummary(executionContext.inventoryRevision, executionContext.summary);
     // When all tools are disabled, clear the system prompt entirely.
     // pi's buildSystemPrompt always produces a non-empty prompt even with no tools;
@@ -1301,6 +1341,7 @@ export async function startRpcSession(
       wrapper.setForceEmptySystemPrompt(true);
     }
     wrapper.start();
+    wrapper.syncBrowserToolActivation();
 
     const realSessionId = inner.sessionId as string;
     const realSessionFile = inner.sessionFile as string | undefined;

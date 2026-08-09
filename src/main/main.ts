@@ -24,6 +24,7 @@ import { resolveBundledCorePaths } from "./toolchains/bundled-core";
 import { isExecutionIntent, type ToolchainSnapshot } from "../shared/toolchains/types";
 import { readLegacyNpmCommand } from "./toolchains/legacy-npm-command";
 import { createElectronRuntimeFetch } from "./toolchains/electron-runtime-fetch";
+import { BrowserService } from "./browser/browser-service";
 
 // Must run before app ready
 registerAppProtocol();
@@ -45,12 +46,14 @@ crashReporter.start({
 
 const isDev = !app.isPackaged;
 const packagedStartupValidation = app.isPackaged && process.argv.includes("--validate-packaged-startup");
+const expectedPiVersion = process.env.PI_DESKTOP_EXPECTED_PI_VERSION;
 const TOOLCHAIN_FOCUS_RESCAN_TTL_MS = 60_000;
 
 let mainWindow: BrowserWindow | null = null;
 let hostManager: HostManager | null = null;
 let updateManager: UpdateManager | null = null;
 let toolchainManager: ToolchainManager | null = null;
+let browserService: BrowserService | null = null;
 let isQuitting = false;
 let unreadBadge = 0;
 let pendingDeepLink: string | null = null;
@@ -68,6 +71,9 @@ function finishPackagedStartupValidation(error?: string): void {
   if (!error) {
     const snapshot = startupToolchainSnapshot;
     if (!startupRendererReady || !startupHostReady || !snapshot?.publicState.coreReady) return;
+    if (!expectedPiVersion || hostManager?.getPiVersion() !== expectedPiVersion) {
+      error = `Agent Host Pi version mismatch: expected ${expectedPiVersion ?? "unknown"}, got ${hostManager?.getPiVersion() ?? "unknown"}`;
+    }
     if ((hostManager?.getToolchainAckRevision() ?? -1) < snapshot.revision) return;
     for (const capability of ["search.rg", "search.fd"] as const) {
       const candidates = snapshot.publicState.capabilities[capability]?.candidates ?? [];
@@ -83,6 +89,7 @@ function finishPackagedStartupValidation(error?: string): void {
       : {
           ok: true,
           appVersion: app.getVersion(),
+          piVersion: hostManager?.getPiVersion(),
           platformArch: `${process.platform}-${process.arch}`,
           revision: startupToolchainSnapshot?.revision,
           rendererReady: startupRendererReady,
@@ -171,6 +178,13 @@ app.on("open-url", (event, url) => {
   handleDeepLink(url);
 });
 
+app.on("login", (event, webContents, _details, authInfo, callback) => {
+  const credentials = browserService?.getProxyCredentialsForWebContents(webContents.id, authInfo.isProxy);
+  if (!credentials) return;
+  event.preventDefault();
+  callback(credentials.username, credentials.password);
+});
+
 function createWindow(): BrowserWindow {
   const win = createMainWindow({
     isDev,
@@ -181,10 +195,18 @@ function createWindow(): BrowserWindow {
     },
     shouldHideOnClose: () => !isQuitting && loadUiState().backgroundMode !== false,
     onClosed: (closedWindow) => {
-      if (mainWindow === closedWindow) mainWindow = null;
+      if (mainWindow === closedWindow) {
+        mainWindow = null;
+        browserService?.handleWindowClosed();
+      }
     },
+    onRendererUnavailable: () => browserService?.handleRendererUnavailable(),
   });
   mainWindow = win;
+  win.on("hide", () => browserService?.handleWindowVisibility(false));
+  win.on("minimize", () => browserService?.handleWindowVisibility(false));
+  win.on("show", () => browserService?.handleWindowVisibility(true));
+  win.on("restore", () => browserService?.handleWindowVisibility(true));
   win.on("focus", () => {
     const manager = toolchainManager;
     const now = Date.now();
@@ -204,6 +226,7 @@ function createWindow(): BrowserWindow {
     });
   }
   if (unreadBadge > 0) applyBadgeCount(unreadBadge);
+  void browserService?.restoreTabs();
   return win;
 }
 
@@ -233,6 +256,15 @@ void app.whenReady().then(async () => {
   }
 
   const credentialVault = new CredentialVault(getUserDataPath("channels.secrets.json"));
+  browserService = new BrowserService({
+    userDataDir: app.getPath("userData"),
+    getWindow: getMainWindow,
+    emit: (event) => {
+      const win = getMainWindow();
+      if (win && !win.isDestroyed()) win.webContents.send("browser:event", event);
+    },
+    onCapabilitySnapshot: (snapshot) => hostManager?.setBrowserCapabilitySnapshot(snapshot),
+  });
   const ui = loadUiState();
   const updaterTestMode = !app.isPackaged && process.env.PI_DESKTOP_TEST_UPDATER === "1";
   const updaterSupported =
@@ -362,6 +394,7 @@ void app.whenReady().then(async () => {
     chooseCustomTool: (capability, executable) => toolchainManager!.registerCustomTool(capability, executable),
     setChannelCredential: (payload) =>
       credentialVault.set(`channel:${payload.channel}:${payload.accountId}`, payload.credential),
+    getBrowserService: () => browserService,
     updateManager,
   });
   installAppMenu(getMainWindow, () => openUpdateSettings(true));
@@ -375,6 +408,7 @@ void app.whenReady().then(async () => {
 
   hostManager = new HostManager(resolveHostEntry());
   hostManager.setToolchainSnapshot(toolchainManager.getSnapshot());
+  hostManager.setBrowserCapabilitySnapshot(browserService.getCapabilitySnapshot());
   const credentialRequestHandler = createCredentialRequestHandler(credentialVault);
   hostManager.setRequestHandler(async (method, params) => {
     if (method.startsWith("channelSecrets.")) return credentialRequestHandler(method, params);
@@ -393,6 +427,9 @@ void app.whenReady().then(async () => {
       }
       return toolchainManager!.resolveForProject(body.cwd, { intent: body.intent, trusted: body.trusted });
     }
+    if (method.startsWith("browser.")) {
+      return browserService!.handleHostRequest(method, params);
+    }
     throw new Error(`Unsupported Host request: ${method}`);
   });
   hostManager.setStatusListener((status, detail) => {
@@ -406,6 +443,7 @@ void app.whenReady().then(async () => {
       runningAgentSessionCount = 0;
       setTrayRunningCount(0, getMainWindow);
       updateManager?.setRunningSessionCount(0);
+      browserService?.onHostStopped();
     }
     for (const win of BrowserWindow.getAllWindows()) {
       win.webContents.send("host:status", { status, detail });
@@ -474,6 +512,19 @@ app.on("before-quit", () => {
   destroyTray();
   hostManager?.stop();
   disposeDesktopTerminals();
+  void browserService?.dispose();
+});
+
+app.on("certificate-error", (event, webContents, url, _error, _certificate, callback) => {
+  try {
+    const hostname = new URL(url).hostname;
+    if (browserService?.handleCertificateError(webContents.id, hostname)) {
+      event.preventDefault();
+      callback(true);
+    }
+  } catch {
+    // Chromium's default certificate policy remains in force.
+  }
 });
 
 app.on("window-all-closed", () => {

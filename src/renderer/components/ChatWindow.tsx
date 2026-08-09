@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type {
   AgentMessage,
   AssistantContentBlock,
@@ -16,8 +16,9 @@ import {
   splitFinalAssistantBlocks,
 } from "@/lib/message-display";
 import { MessageView } from "./MessageView";
+import { SessionProfiler } from "./SessionProfiler";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
-import { ChatMinimap, useMessageRefs } from "./ChatMinimap";
+import { ChatMinimap, useMessageRefs, type ChatMinimapMessage } from "./ChatMinimap";
 import { useAgentSession, type AgentPhase, type NoticeItem } from "@/hooks/useAgentSession";
 import { useAudio } from "@/hooks/useAudio";
 import { useDragDrop } from "@/hooks/useDragDrop";
@@ -64,6 +65,28 @@ function phaseLabel(phase: AgentPhase, t: (key: string, fallback: string) => str
 const CHAT_MINIMAP_WIDTH = 36;
 const CHAT_COLUMN_PADDING = 16;
 const CHAT_INPUT_RIGHT_PADDING = CHAT_COLUMN_PADDING + CHAT_MINIMAP_WIDTH;
+
+function toMinimapMessage(message: AgentMessage | Partial<AgentMessage>): ChatMinimapMessage | null {
+  if (message.role !== "user" && message.role !== "assistant") return null;
+  const content = message.content;
+  if (message.role === "user") {
+    const preview =
+      typeof content === "string"
+        ? content
+        : Array.isArray(content)
+          ? content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join(" ")
+          : "";
+    return { role: "user", preview: preview.slice(0, 200), hasText: true };
+  }
+  const blocks = Array.isArray(content) ? content : [];
+  const text = blocks.flatMap((block) => (block.type === "text" ? [block.text] : [])).join(" ");
+  const toolNames = blocks.flatMap((block) => (block.type === "toolCall" ? [block.toolName] : []));
+  return {
+    role: "assistant",
+    preview: (text || toolNames.join(", ")).slice(0, 200),
+    hasText: text.length > 0,
+  };
+}
 
 function hasFinalAssistantAnswer(message: AgentMessage): boolean {
   if (message.role !== "assistant") return false;
@@ -230,6 +253,8 @@ export function ChatWindow({
     agentRunning,
     modelNames,
     modelList,
+    modelCatalog,
+    modelRefreshing,
     modelThinkingLevels,
     modelThinkingLevelMaps,
     toolPreset,
@@ -245,6 +270,8 @@ export function ChatWindow({
     slashCommands,
     slashCommandsLoading,
     queuedMessages,
+    hasOlder,
+    loadingOlder,
     notices,
     extensionDialog,
     extensionCustomUi,
@@ -264,6 +291,8 @@ export function ChatWindow({
     handleFork,
     handleNavigate,
     handleModelChange,
+    refreshModels,
+    cancelModelRefresh,
     handleCompact,
     handleSteer,
     handleFollowUp,
@@ -274,10 +303,8 @@ export function ChatWindow({
     handleToolPresetChange,
     handleThinkingLevelChange,
     loadSlashCommands,
-    loadOlderMessages,
-    hasOlderMessages,
-    totalMessageCount,
-    messageLimit,
+    loadOlder,
+    loadDeferredContent,
   } = useAgentSession({
     session,
     newSessionCwd,
@@ -351,22 +378,33 @@ export function ChatWindow({
 
   const visibleMessages = messages.filter((m) => m.role === "user" || m.role === "assistant");
   const messageRefs = useMessageRefs(visibleMessages.length);
+  const minimapMessages = useMemo(() => messages.flatMap((message) => toMinimapMessage(message) ?? []), [messages]);
+  const minimapStreamingMessage = useMemo(
+    () => (streamState.streamingMessage ? toMinimapMessage(streamState.streamingMessage) : null),
+    [streamState.streamingMessage],
+  );
+  const olderHistorySentinelRef = useRef<HTMLDivElement | null>(null);
+  const automaticHistoryPagesRef = useRef(0);
 
-  // The "load earlier messages" affordance appears only when the user has
-  // scrolled to the very top of the conversation (no older messages above).
-  const [atConversationTop, setAtConversationTop] = useState(true);
   useEffect(() => {
-    const el = scrollContainerRef.current;
-    if (!el) return;
-    const onScroll = () => {
-      const next = el.scrollTop <= 40;
-      setAtConversationTop((prev) => (prev === next ? prev : next));
-    };
-    el.addEventListener("scroll", onScroll, { passive: true });
-    onScroll();
-    return () => el.removeEventListener("scroll", onScroll);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- the scroll container ref is stable for the component's lifetime.
-  }, []);
+    automaticHistoryPagesRef.current = 0;
+  }, [session?.id]);
+
+  useEffect(() => {
+    const sentinel = olderHistorySentinelRef.current;
+    const root = scrollContainerRef.current;
+    if (!sentinel || !root || !hasOlder || loadingOlder) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry.isIntersecting || automaticHistoryPagesRef.current >= 3) return;
+        automaticHistoryPagesRef.current += 1;
+        void loadOlder();
+      },
+      { root, rootMargin: "160px 0px 0px" },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasOlder, loadOlder, loadingOlder, messages.length, scrollContainerRef]);
 
   // Progressive message mounting: mounting every MessageView at once stalls
   // the UI when switching to a big session. Mount the most recent slice first
@@ -410,7 +448,11 @@ export function ChatWindow({
       isAutoModelSelection={isAutoModelSelection}
       modelNames={modelNames}
       modelList={modelList}
+      modelCatalog={modelCatalog}
+      modelRefreshing={modelRefreshing}
       onModelChange={handleModelChange}
+      onModelsRefresh={refreshModels}
+      onModelsRefreshCancel={cancelModelRefresh}
       onCompact={session || isNew ? handleCompact : undefined}
       onAbortCompaction={handleAbortCompaction}
       isCompacting={isCompacting}
@@ -613,37 +655,31 @@ export function ChatWindow({
             <div ref={scrollContainerRef} className="relative z-[1] flex-1 overflow-y-auto pt-4 [scrollbar-width:none]">
               <div style={{ padding: `0 ${CHAT_COLUMN_PADDING}px` }}>
                 <div style={{ maxWidth: "var(--chat-content-max-width)", margin: "0 auto" }}>
-                  <ExtensionStatusBar statuses={extensionStatuses} />
-                  <ExtensionWidgets widgets={aboveEditorWidgets} />
-
-                  {hasOlderMessages && atConversationTop && (
-                    <div style={{ display: "flex", justifyContent: "center", padding: "4px 0 10px" }}>
+                  {(hasOlder || loadingOlder) && (
+                    <div
+                      ref={olderHistorySentinelRef}
+                      style={{ display: "flex", justifyContent: "center", padding: 8 }}
+                    >
                       <button
                         type="button"
-                        onClick={() => {
-                          const el = scrollContainerRef.current;
-                          const prevHeight = el?.scrollHeight ?? 0;
-                          void loadOlderMessages().then(() => {
-                            requestAnimationFrame(() => {
-                              if (el) el.scrollTop += el.scrollHeight - prevHeight;
-                            });
-                          });
-                        }}
-                        disabled={loading}
+                        disabled={loadingOlder}
+                        onClick={() => void loadOlder()}
                         style={{
-                          padding: "7px 14px",
-                          borderRadius: 6,
                           border: "1px solid var(--border)",
+                          borderRadius: 7,
                           background: "var(--bg-panel)",
                           color: "var(--text-muted)",
-                          fontSize: 12,
-                          cursor: loading ? "default" : "pointer",
+                          cursor: loadingOlder ? "default" : "pointer",
+                          fontSize: 11,
+                          padding: "5px 10px",
                         }}
                       >
-                        {t("loadEarlierMessages", "↑ Load earlier messages")} ({messageLimit}/{totalMessageCount})
+                        {loadingOlder ? "Loading earlier messages…" : "Load earlier messages"}
                       </button>
                     </div>
                   )}
+                  <ExtensionStatusBar statuses={extensionStatuses} />
+                  <ExtensionWidgets widgets={aboveEditorWidgets} />
 
                   {(() => {
                     const toolResultsMap = new Map<string, ToolResultMessage>();
@@ -658,6 +694,17 @@ export function ChatWindow({
                       if (messages[i].role === "user") {
                         lastUserIdx = i;
                         break;
+                      }
+                    }
+
+                    const timestampAssistantIndices = new Set<number>();
+                    let foundAssistantInTurn = false;
+                    for (let i = messages.length - 1; i >= 0; i--) {
+                      if (messages[i].role === "user") {
+                        foundAssistantInTurn = false;
+                      } else if (messages[i].role === "assistant" && !foundAssistantInTurn) {
+                        timestampAssistantIndices.add(i);
+                        foundAssistantInTurn = true;
                       }
                     }
 
@@ -695,15 +742,7 @@ export function ChatWindow({
                       const keyPrefix = options.keyPrefix ?? "message";
                       let showTimestamp = false;
                       if (msg.role === "assistant") {
-                        showTimestamp = true;
-                        for (let j = idx + 1; j < messages.length; j++) {
-                          const r = messages[j].role;
-                          if (r === "user") break;
-                          if (r === "assistant") {
-                            showTimestamp = false;
-                            break;
-                          }
-                        }
+                        showTimestamp = timestampAssistantIndices.has(idx);
                         // Hide on the currently-streaming tail (the streaming bubble owns the live timestamp)
                         if (showTimestamp && streamState.isStreaming && idx === messages.length - 1) {
                           showTimestamp = false;
@@ -711,24 +750,30 @@ export function ChatWindow({
                       }
                       if (options.showTimestamp !== undefined) showTimestamp = options.showTimestamp;
                       const view = (
-                        <MessageView
-                          key={`${keyPrefix}-view-${idx}`}
-                          message={msg}
-                          toolResults={toolResultsMap}
-                          modelNames={modelNames}
-                          cwd={messageCwd}
-                          onOpenFile={onOpenFile}
-                          entryId={entryIds[idx]}
-                          onFork={agentRunning || isNew || (idx === 0 && msg.role === "user") ? undefined : handleFork}
-                          forking={forkingEntryId === entryIds[idx]}
-                          onNavigate={agentRunning ? undefined : handleNavigate}
-                          prevAssistantEntryId={agentRunning ? undefined : prevAssistantEntryId}
-                          onEditContent={(content) => chatInputRef?.current?.insertIfEmpty(content)}
-                          showTimestamp={showTimestamp}
-                          prevTimestamp={
-                            idx > 0 ? (messages[idx - 1] as AgentMessage & { timestamp?: number }).timestamp : undefined
-                          }
-                        />
+                        <SessionProfiler key={`${keyPrefix}-view-${idx}`} id="MessageView">
+                          <MessageView
+                            message={msg}
+                            toolResults={toolResultsMap}
+                            modelNames={modelNames}
+                            cwd={messageCwd}
+                            onOpenFile={onOpenFile}
+                            entryId={entryIds[idx]}
+                            onFork={
+                              agentRunning || isNew || (idx === 0 && msg.role === "user") ? undefined : handleFork
+                            }
+                            forking={forkingEntryId === entryIds[idx]}
+                            onNavigate={agentRunning ? undefined : handleNavigate}
+                            prevAssistantEntryId={agentRunning ? undefined : prevAssistantEntryId}
+                            onEditContent={(content) => chatInputRef?.current?.insertIfEmpty(content)}
+                            onLoadDeferredContent={loadDeferredContent}
+                            showTimestamp={showTimestamp}
+                            prevTimestamp={
+                              idx > 0
+                                ? (messages[idx - 1] as AgentMessage & { timestamp?: number }).timestamp
+                                : undefined
+                            }
+                          />
+                        </SessionProfiler>
                       );
                       if (!isVisible || options.attachRef === false || currentRefIdx === undefined) return view;
                       return (
@@ -871,13 +916,15 @@ export function ChatWindow({
                   })()}
 
                   {streamState.isStreaming && streamState.streamingMessage && (
-                    <MessageView
-                      message={streamState.streamingMessage as AgentMessage}
-                      isStreaming
-                      modelNames={modelNames}
-                      cwd={messageCwd}
-                      onOpenFile={onOpenFile}
-                    />
+                    <SessionProfiler id="MessageView">
+                      <MessageView
+                        message={streamState.streamingMessage as AgentMessage}
+                        isStreaming
+                        modelNames={modelNames}
+                        cwd={messageCwd}
+                        onOpenFile={onOpenFile}
+                      />
+                    </SessionProfiler>
                   )}
 
                   {agentRunning && !streamState.streamingMessage && (
@@ -899,12 +946,15 @@ export function ChatWindow({
               </div>
             </div>
             {isMobile ? null : (
-              <ChatMinimap
-                messages={messages}
-                streamingMessage={streamState.streamingMessage}
-                scrollContainer={scrollContainerRef}
-                messageRefs={messageRefs}
-              />
+              <SessionProfiler id="ChatMinimap">
+                <ChatMinimap
+                  messages={minimapMessages}
+                  streamingMessage={minimapStreamingMessage}
+                  scrollContainer={scrollContainerRef}
+                  messageRefs={messageRefs}
+                  historyTruncated={hasOlder}
+                />
+              </SessionProfiler>
             )}
           </div>
         </>

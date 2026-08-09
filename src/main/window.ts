@@ -16,6 +16,7 @@ export type CreateMainWindowOptions = {
   consumePendingDeepLink?: () => string | null;
   shouldHideOnClose?: () => boolean;
   onClosed?: (window: BrowserWindow) => void;
+  onRendererUnavailable?: (reason: string) => void;
   onConsoleError?: (message: string) => void;
 };
 
@@ -92,8 +93,16 @@ export function createMainWindow(options: CreateMainWindowOptions): BrowserWindo
   win.on("closed", () => options.onClosed?.(win));
 
   win.webContents.on("render-process-gone", (_event, details) => {
+    options.onRendererUnavailable?.(`render-process-gone:${details.reason}`);
     appendMainLog(`render-process-gone: ${details.reason}`);
     if (!win.isDestroyed()) win.reload();
+  });
+
+  // Main-owned child Views outlive the page Renderer. Hide them before the
+  // page starts loading so a reload/HMR navigation cannot leave a stale native
+  // surface above the replacement React UI.
+  win.webContents.on("did-start-loading", () => {
+    options.onRendererUnavailable?.("did-start-loading");
   });
 
   win.webContents.on("did-finish-load", () => {
@@ -114,9 +123,11 @@ export function createMainWindow(options: CreateMainWindowOptions): BrowserWindo
   });
 
   win.webContents.on("console-message", (_event, level, message, line, sourceId) => {
-    if (level < 2) return;
+    const isSessionPerformanceLog =
+      options.isDev && (message.startsWith("[perf:sessions]") || message.startsWith("[perf:sessions:react]"));
+    if (level < 2 && !isSessionPerformanceLog) return;
     appendMainLog(`renderer[${level}] ${message} (${sourceId}:${line})`);
-    options.onConsoleError?.(message);
+    if (level >= 2) options.onConsoleError?.(message);
   });
 
   const url = resolveRendererEntry(options.isDev, options.runtimeMainDirectory);

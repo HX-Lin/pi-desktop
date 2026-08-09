@@ -15,13 +15,16 @@ import { SkillsConfig } from "./SkillsConfig";
 import { PromptsConfig } from "./PromptsConfig";
 import { PluginsConfig } from "./PluginsConfig";
 import { ToolchainsConfig } from "./ToolchainsConfig";
+import { BrowserSettings } from "./browser/BrowserSettings";
 import { ChannelsConfig } from "./channels/ChannelsConfig";
 import type { ChannelsSnapshot } from "@shared/channel-types";
+import { APP_WEBSITE_URL } from "@shared/app-links";
 import type { DesktopUpdateState } from "../../contract/desktop";
 import { APP_AUTHOR, APP_DISPLAY_NAME, APP_GITHUB_URL, APP_VERSION, PI_VERSION } from "@/lib/app-version";
 import appIconUrl from "../../../build/icon.png";
 
-export type SettingsTab = "general" | "channels" | "models" | "tools" | "skills" | "prompts" | "plugins" | "about";
+export type SettingsTab =
+  "general" | "browser" | "channels" | "models" | "tools" | "skills" | "prompts" | "plugins" | "about";
 
 interface SettingsConfigProps {
   cwd: string | null;
@@ -79,6 +82,7 @@ export function SettingsConfig({
     { id: "skills", label: t("skills", "Skills") },
     { id: "prompts", label: t("prompts", "Prompts") },
     { id: "plugins", label: t("plugins", "Plugins") },
+    { id: "browser", label: t("browser", "Browser") },
     { id: "channels", label: t("channels", "Channels") },
     { id: "tools", label: t("developerTools", "Developer Tools") },
     { id: "about", label: t("about", "About") },
@@ -138,7 +142,7 @@ export function SettingsConfig({
         }}
         tabIndex={-1}
         style={{
-          width: isMobile ? "calc(100vw - 16px)" : 900,
+          width: isMobile ? "calc(100vw - 16px)" : 960,
           maxWidth: "calc(100vw - 16px)",
           height: isMobile ? "calc(100dvh - 16px)" : "82vh",
           maxHeight: "calc(100dvh - 16px)",
@@ -195,94 +199,107 @@ export function SettingsConfig({
           </button>
         </div>
 
-        <div
-          role="tablist"
-          aria-label={t("settings", "Settings")}
-          style={{
-            display: "flex",
-            gap: 8,
-            padding: "10px 14px",
-            borderBottom: "1px solid var(--border)",
-            overflowX: "auto",
-            flexShrink: 0,
-            background: "var(--bg-panel)",
-          }}
-        >
-          {tabs.map((tab) => {
-            const active = tab.id === activeTab;
-            return (
-              <button
-                key={tab.id}
-                id={`settings-tab-${tab.id}`}
-                type="button"
-                role="tab"
-                aria-selected={active}
-                aria-controls="settings-tabpanel"
-                tabIndex={active ? 0 : -1}
-                onClick={() => setActiveTab(tab.id)}
-                onKeyDown={(event) => {
-                  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-                  event.preventDefault();
-                  const currentIndex = tabs.findIndex((item) => item.id === tab.id);
-                  const direction = event.key === "ArrowRight" ? 1 : -1;
-                  const nextTab = tabs[(currentIndex + direction + tabs.length) % tabs.length];
-                  setActiveTab(nextTab.id);
-                  document.getElementById(`settings-tab-${nextTab.id}`)?.focus();
-                }}
-                style={{
-                  minWidth: isMobile ? 88 : 112,
-                  height: 34,
-                  padding: "0 16px",
-                  border: `1px solid ${active ? "var(--accent)" : "var(--border)"}`,
-                  borderRadius: 6,
-                  background: active ? "var(--accent-soft)" : "var(--bg)",
-                  color: active ? "var(--accent)" : "var(--text-muted)",
-                  fontSize: 12,
-                  fontWeight: active ? 650 : 500,
-                  cursor: "pointer",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {tab.label}
-              </button>
-            );
-          })}
-        </div>
+        <div style={{ flex: 1, minHeight: 0, minWidth: 0, display: "flex", overflow: "hidden" }}>
+          <div
+            role="tablist"
+            aria-label={t("settings", "Settings")}
+            aria-orientation="vertical"
+            style={{
+              width: isMobile ? 112 : 168,
+              display: "flex",
+              flexDirection: "column",
+              gap: 4,
+              padding: isMobile ? "10px 8px" : "12px 10px",
+              borderRight: "1px solid var(--border)",
+              overflowY: "auto",
+              flexShrink: 0,
+              background: "var(--bg-panel)",
+            }}
+          >
+            {tabs.map((tab) => {
+              const active = tab.id === activeTab;
+              return (
+                <button
+                  key={tab.id}
+                  id={`settings-tab-${tab.id}`}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  aria-controls="settings-tabpanel"
+                  tabIndex={active ? 0 : -1}
+                  onClick={() => setActiveTab(tab.id)}
+                  onKeyDown={(event) => {
+                    const currentIndex = tabs.findIndex((item) => item.id === tab.id);
+                    let nextIndex: number | undefined;
+                    if (event.key === "ArrowDown") nextIndex = (currentIndex + 1) % tabs.length;
+                    if (event.key === "ArrowUp") nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+                    if (event.key === "Home") nextIndex = 0;
+                    if (event.key === "End") nextIndex = tabs.length - 1;
+                    if (nextIndex === undefined) return;
+                    event.preventDefault();
+                    const nextTab = tabs[nextIndex];
+                    setActiveTab(nextTab.id);
+                    document.getElementById(`settings-tab-${nextTab.id}`)?.focus();
+                  }}
+                  style={{
+                    position: "relative",
+                    width: "100%",
+                    minHeight: 40,
+                    padding: isMobile ? "8px 10px" : "8px 12px",
+                    border: `1px solid ${active ? "var(--accent)" : "transparent"}`,
+                    borderRadius: 7,
+                    background: active ? "var(--accent-soft)" : "transparent",
+                    color: active ? "var(--accent)" : "var(--text-muted)",
+                    fontSize: 12,
+                    lineHeight: 1.35,
+                    fontWeight: active ? 650 : 500,
+                    textAlign: "left",
+                    cursor: "pointer",
+                    overflowWrap: "anywhere",
+                  }}
+                >
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
 
-        <div
-          id="settings-tabpanel"
-          role="tabpanel"
-          aria-labelledby={`settings-tab-${activeTab}`}
-          style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex" }}
-        >
-          {activeTab === "general" && (
-            <GeneralSettings
-              language={language}
-              onLanguageChange={setLanguage}
-              theme={theme}
-              onThemeChange={setTheme}
-            />
-          )}
-          {activeTab === "models" && <ModelsConfig embedded onClose={() => undefined} onChanged={onModelsChanged} />}
-          {activeTab === "tools" && <ToolchainsConfig cwd={cwd} />}
-          {activeTab === "channels" && <ChannelsConfig onSnapshotChange={onChannelsChanged} />}
-          {activeTab === "skills" &&
-            (cwd ? <SkillsConfig embedded cwd={cwd} onClose={() => undefined} /> : <ProjectRequired />)}
-          {activeTab === "prompts" &&
-            (cwd ? <PromptsConfig embedded cwd={cwd} onClose={() => undefined} /> : <ProjectRequired />)}
-          {activeTab === "plugins" &&
-            (cwd ? (
-              <PluginsConfig
-                embedded
-                cwd={cwd}
-                sessionId={sessionId}
-                onClose={() => undefined}
-                onReloaded={onPluginsReloaded}
+          <div
+            id="settings-tabpanel"
+            role="tabpanel"
+            aria-labelledby={`settings-tab-${activeTab}`}
+            style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden", display: "flex" }}
+          >
+            {activeTab === "general" && (
+              <GeneralSettings
+                language={language}
+                onLanguageChange={setLanguage}
+                theme={theme}
+                onThemeChange={setTheme}
               />
-            ) : (
-              <ProjectRequired />
-            ))}
-          {activeTab === "about" && <AboutSettings onClose={onClose} />}
+            )}
+            {activeTab === "browser" && <BrowserSettings sessionId={sessionId} />}
+            {activeTab === "models" && <ModelsConfig embedded onClose={() => undefined} onChanged={onModelsChanged} />}
+            {activeTab === "tools" && <ToolchainsConfig cwd={cwd} />}
+            {activeTab === "channels" && <ChannelsConfig onSnapshotChange={onChannelsChanged} />}
+            {activeTab === "skills" &&
+              (cwd ? <SkillsConfig embedded cwd={cwd} onClose={() => undefined} /> : <ProjectRequired />)}
+            {activeTab === "prompts" &&
+              (cwd ? <PromptsConfig embedded cwd={cwd} onClose={() => undefined} /> : <ProjectRequired />)}
+            {activeTab === "plugins" &&
+              (cwd ? (
+                <PluginsConfig
+                  embedded
+                  cwd={cwd}
+                  sessionId={sessionId}
+                  onClose={() => undefined}
+                  onReloaded={onPluginsReloaded}
+                />
+              ) : (
+                <ProjectRequired />
+              ))}
+            {activeTab === "about" && <AboutSettings onClose={onClose} />}
+          </div>
         </div>
       </div>
     </div>
@@ -345,6 +362,30 @@ function AboutSettings({ onClose }: { onClose: () => void }) {
             <AboutRow label={t("softwareVersion", "Software version")} value={`v${APP_VERSION}`} />
             <AboutRow label={t("piVersion", "Pi version")} value={`v${PI_VERSION}`} />
             <AboutRow label={t("author", "Author")} value={APP_AUTHOR} />
+            <AboutRow
+              label={t("officialWebsite", "Official website")}
+              value={
+                <button
+                  type="button"
+                  title={t("openOfficialWebsite", "Open official website")}
+                  onClick={() => void window.piBridge.openExternal(APP_WEBSITE_URL)}
+                  style={{
+                    maxWidth: "100%",
+                    padding: 0,
+                    border: 0,
+                    background: "none",
+                    color: "var(--accent)",
+                    fontFamily: "var(--font-mono)",
+                    fontSize: 12,
+                    cursor: "pointer",
+                    overflowWrap: "anywhere",
+                    textAlign: "right",
+                  }}
+                >
+                  pi-desktop.app ↗
+                </button>
+              }
+            />
             <AboutRow
               label={t("githubRepository", "GitHub repository")}
               value={

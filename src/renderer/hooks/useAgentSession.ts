@@ -1,20 +1,28 @@
 import { useState, useCallback, useRef, useEffect, useReducer } from "react";
 import type {
   AgentMessage,
+  AssistantContentBlock,
   ExtensionStatusItem,
   ExtensionUiRequest,
   ExtensionWidgetItem,
+  ImageContent,
   SessionInfo,
   SessionTreeNode,
+  TextContent,
 } from "@/lib/types";
+import type { ModelCatalogStatus, ModelsListResult, SessionDetail, SessionRuntimeState } from "@contract/types";
 import { normalizeToolCalls } from "@/lib/normalize";
 import { sendAgentCommand } from "@/lib/agent-client";
 import {
   agentState,
+  cancelModelsRefresh,
   getSession,
   getSessionContext,
+  getSessionContextPage,
+  getSessionEntryContent,
   listModels,
   newAgent,
+  refreshModels as requestModelsRefresh,
   subscribeAgentEvents,
   subscribeSessionsChanged,
 } from "@/lib/api-client";
@@ -22,27 +30,18 @@ import { getToolNamesForPreset, type ToolEntry } from "@/lib/tool-presets";
 import type { SessionStatsInfo } from "@/lib/pi-types";
 import { subscribeActiveSessionLiveSync } from "./active-session-live-sync";
 import { isNearChatBottom, shouldStopChatAutoFollow } from "./chat-scroll-policy";
+import {
+  consumeSessionLoadTrace,
+  failSessionLoadTrace,
+  finishSessionLoadTrace,
+  logSessionPerformanceEvent,
+  markSessionLoadPhase,
+  type SessionLoadTrace,
+} from "@/lib/session-performance";
+import { mergeHistoryTail, prependHistoryPage } from "@/lib/session-pagination";
 
-export interface SessionData {
-  sessionId: string;
-  filePath: string;
-  tree: SessionTreeNode[];
-  leafId: string | null;
-  context: {
-    messages: AgentMessage[];
-    entryIds: string[];
-    thinkingLevel: string;
-    model: { provider: string; modelId: string } | null;
-    /** Total messages on this branch (before pagination). */
-    totalMessageCount?: number;
-    /** True when only the most recent page was returned. */
-    truncated?: boolean;
-  };
-}
-
-/** Messages rendered initially; older ones load on demand to keep huge
- * sessions from rendering thousands of nodes at once. */
-export const MESSAGE_PAGE_SIZE = 50;
+export type SessionData = SessionDetail;
+type AgentStateResponse = SessionRuntimeState;
 
 interface StreamingState {
   isStreaming: boolean;
@@ -79,18 +78,6 @@ interface CompactCommandResult {
 interface LastAssistantTextResponse {
   text?: string;
 }
-
-type AgentStateResponse = {
-  contextUsage?: { percent: number | null; contextWindow: number; tokens: number | null } | null;
-  systemPrompt?: string;
-  thinkingLevel?: string;
-  isStreaming?: boolean;
-  isPromptRunning?: boolean;
-  isCompacting?: boolean;
-  extensionStatuses?: ExtensionStatusItem[];
-  extensionWidgets?: ExtensionWidgetItem[];
-  queuedMessages?: { steering?: string[]; followUp?: string[] } | null;
-};
 
 export interface QueuedMessages {
   steering: string[];
@@ -175,6 +162,9 @@ const PROMPT_SETTLE_POLL_MS = 600;
 const PROMPT_SETTLE_MAX_MS = 20_000;
 const AGENT_STATE_RECONCILE_MS = 15_000;
 const EVENT_STREAM_CONNECT_TIMEOUT_MS = 5_000;
+const INITIAL_HISTORY_TURNS = 20;
+const HISTORY_PAGE_MAX_BYTES = 1024 * 1024;
+const DEFERRED_CONTENT_CACHE_SIZE = 12;
 const MAX_NOTICES = 5;
 const NOTICE_VISIBLE_MS = 5000;
 const NOTICE_EXIT_ANIMATION_MS = 180;
@@ -352,6 +342,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [agentRunning, setAgentRunning] = useState(false);
   const [modelNames, setModelNames] = useState<Record<string, string>>({});
   const [modelList, setModelList] = useState<ModelEntry[]>([]);
+  const [modelCatalog, setModelCatalog] = useState<ModelCatalogStatus>({
+    source: "cache",
+    refreshed: false,
+    aborted: false,
+    warnings: [],
+  });
+  const [modelRefreshing, setModelRefreshing] = useState(false);
   const [modelThinkingLevels, setModelThinkingLevels] = useState<Record<string, string[]>>({});
   const [modelThinkingLevelMaps, setModelThinkingLevelMaps] = useState<Record<string, Record<string, string | null>>>(
     {},
@@ -385,15 +382,14 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [extensionStatuses, setExtensionStatuses] = useState<ExtensionStatusItem[]>([]);
   const [extensionWidgets, setExtensionWidgets] = useState<ExtensionWidgetItem[]>([]);
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessages>({ steering: [], followUp: [] });
+  const [previousCursor, setPreviousCursor] = useState<string | null>(null);
+  const [historyRevision, setHistoryRevision] = useState<string | null>(null);
+  const [loadingOlder, setLoadingOlder] = useState(false);
 
   const eventUnsubRef = useRef<(() => void) | null>(null);
+  const modelRefreshRequestRef = useRef<string | null>(null);
   const sessionIdRef = useRef<string | null>(session?.id ?? null);
   const agentRunningRef = useRef(false);
-  const [messageLimit, setMessageLimit] = useState(MESSAGE_PAGE_SIZE);
-  const messageLimitRef = useRef(MESSAGE_PAGE_SIZE);
-  messageLimitRef.current = messageLimit;
-  const hasOlderMessages = data?.context.truncated === true;
-  const totalMessageCount = data?.context.totalMessageCount ?? messages.length;
   const handleAgentEventRef = useRef<((event: AgentEvent) => void) | null>(null);
   const initialScrollDoneRef = useRef(false);
   const lastUserMsgRef = useRef<HTMLDivElement | null>(null);
@@ -410,6 +406,17 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const newSessionPromotedRef = useRef(false);
   const promptRunIdRef = useRef(0);
   const optimisticUserMessageKeyRef = useRef<string | null>(null);
+  const pendingSessionLoadTraceRef = useRef<SessionLoadTrace | null>(null);
+  const historyGenerationRef = useRef(0);
+  const historyRevisionRef = useRef<string | null>(null);
+  const previousCursorRef = useRef<string | null>(null);
+  const loadedMessagesRef = useRef<AgentMessage[]>([]);
+  const loadedEntryIdsRef = useRef<string[]>([]);
+  const olderRequestRef = useRef<string | null>(null);
+  const deferredContentCacheRef = useRef<Map<string, AssistantContentBlock | TextContent | ImageContent>>(new Map());
+  const deferredContentRequestRef = useRef<Map<string, Promise<AssistantContentBlock | TextContent | ImageContent>>>(
+    new Map(),
+  );
 
   const setToolPresetState = opts.setToolPreset ?? setToolPreset;
 
@@ -455,74 +462,244 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } satisfies SessionStatsInfo;
   })();
 
-  const loadSession = useCallback(async (sid: string, showLoading = false, includeState = false) => {
-    try {
-      if (showLoading) setLoading(true);
-      let result: SessionData & { agentState?: { running: boolean; state?: AgentStateResponse } };
-      try {
-        // Host returns the same flat shape as old GET /api/sessions/[id]
-        result = (await getSession(sid, includeState, messageLimitRef.current)) as unknown as SessionData & {
-          agentState?: { running: boolean; state?: AgentStateResponse };
-        };
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        if (msg.includes("not found") || msg.includes("NOT_FOUND")) {
-          if (showLoading) {
-            setData(null);
-            setActiveLeafId(null);
-            setMessages([]);
-            setError(null);
-          }
-          return null;
-        }
-        throw e;
-      }
-      const d = result;
-
-      setData(d);
-      setActiveLeafId(d.leafId);
-      setMessages(d.context.messages);
-      setEntryIds(d.context.entryIds ?? []);
-      setCurrentModelOverride(null);
-      setError(null);
-      const liveState = d.agentState?.state;
-      if (liveState) {
-        if (liveState.contextUsage !== undefined) setContextUsage(liveState.contextUsage ?? null);
-        if (liveState.systemPrompt !== undefined) setSystemPrompt(liveState.systemPrompt ?? null);
-        if (liveState.thinkingLevel !== undefined)
-          setThinkingLevel((liveState.thinkingLevel as ThinkingLevelOption) ?? "auto");
-        if (liveState.extensionStatuses !== undefined) setExtensionStatuses(liveState.extensionStatuses ?? []);
-        if (liveState.extensionWidgets !== undefined) setExtensionWidgets(liveState.extensionWidgets ?? []);
-        if (liveState.queuedMessages !== undefined)
-          setQueuedMessages(normalizeQueuedMessages(liveState.queuedMessages));
-      } else if (d.agentState && !d.agentState.running) setQueuedMessages({ steering: [], followUp: [] });
-      if (!liveState?.thinkingLevel && d.context.thinkingLevel && d.context.thinkingLevel !== "off") {
-        setThinkingLevel(d.context.thinkingLevel as ThinkingLevelOption);
-      }
-      return d.agentState ?? null;
-    } catch (e) {
-      setError(String(e));
-      return null;
-    } finally {
-      if (showLoading) setLoading(false);
-    }
+  const commitHistory = useCallback((nextMessages: AgentMessage[], nextEntryIds: string[]) => {
+    loadedMessagesRef.current = nextMessages;
+    loadedEntryIdsRef.current = nextEntryIds;
+    setMessages(nextMessages);
+    setEntryIds(nextEntryIds);
   }, []);
+
+  const updatePagingState = useCallback((revision: string, cursor?: string) => {
+    historyRevisionRef.current = revision;
+    previousCursorRef.current = cursor ?? null;
+    setHistoryRevision(revision);
+    setPreviousCursor(cursor ?? null);
+  }, []);
+
+  const loadSession = useCallback(
+    async (sid: string, showLoading = false, includeState = false, resetHistory = false) => {
+      const trace = consumeSessionLoadTrace(sid, showLoading ? "initial" : "refresh");
+      let traceFailed = false;
+      try {
+        if (showLoading) setLoading(true);
+        if (resetHistory) {
+          historyGenerationRef.current += 1;
+          olderRequestRef.current = null;
+          setLoadingOlder(false);
+        }
+        const loadGeneration = historyGenerationRef.current;
+        let result: SessionData;
+        try {
+          markSessionLoadPhase(trace, "rpc-start");
+          result = await getSession(sid, includeState, trace.id, {
+            maxTurns: INITIAL_HISTORY_TURNS,
+            maxBytes: HISTORY_PAGE_MAX_BYTES,
+          });
+          markSessionLoadPhase(trace, "rpc-end");
+        } catch (e) {
+          failSessionLoadTrace(trace);
+          traceFailed = true;
+          const msg = e instanceof Error ? e.message : String(e);
+          if (msg.includes("not found") || msg.includes("NOT_FOUND")) {
+            if (showLoading) {
+              setData(null);
+              setActiveLeafId(null);
+              setMessages([]);
+              setError(null);
+            }
+            return null;
+          }
+          throw e;
+        }
+        const d = result;
+        if (sessionIdRef.current !== sid || loadGeneration !== historyGenerationRef.current) return null;
+
+        setData(d);
+        setActiveLeafId(d.leafId);
+        pendingSessionLoadTraceRef.current = trace;
+        const mergedHistory = mergeHistoryTail(
+          {
+            messages: loadedMessagesRef.current,
+            entryIds: loadedEntryIdsRef.current,
+            revision: historyRevisionRef.current,
+            previousCursor: previousCursorRef.current,
+          },
+          d.context,
+          resetHistory,
+        );
+        if (mergedHistory.revision !== historyRevisionRef.current) {
+          deferredContentCacheRef.current.clear();
+          deferredContentRequestRef.current.clear();
+        }
+        commitHistory(mergedHistory.messages, mergedHistory.entryIds);
+        updatePagingState(mergedHistory.revision!, mergedHistory.previousCursor ?? undefined);
+        setCurrentModelOverride(null);
+        setError(null);
+        const liveState = d.agentState?.state;
+        if (liveState) {
+          if (liveState.contextUsage !== undefined) setContextUsage(liveState.contextUsage ?? null);
+          if (liveState.systemPrompt !== undefined) setSystemPrompt(liveState.systemPrompt ?? null);
+          if (liveState.thinkingLevel !== undefined)
+            setThinkingLevel((liveState.thinkingLevel as ThinkingLevelOption) ?? "auto");
+          if (liveState.extensionStatuses !== undefined) setExtensionStatuses(liveState.extensionStatuses ?? []);
+          if (liveState.extensionWidgets !== undefined) setExtensionWidgets(liveState.extensionWidgets ?? []);
+          if (liveState.queuedMessages !== undefined)
+            setQueuedMessages(normalizeQueuedMessages(liveState.queuedMessages));
+        } else if (d.agentState && !d.agentState.running) setQueuedMessages({ steering: [], followUp: [] });
+        if (!liveState?.thinkingLevel && d.context.thinkingLevel && d.context.thinkingLevel !== "off") {
+          setThinkingLevel(d.context.thinkingLevel as ThinkingLevelOption);
+        }
+        return d.agentState ?? null;
+      } catch (e) {
+        if (!traceFailed) failSessionLoadTrace(trace);
+        setError(String(e));
+        return null;
+      } finally {
+        if (showLoading) setLoading(false);
+      }
+    },
+    [commitHistory, updatePagingState],
+  );
+
+  useEffect(() => {
+    const trace = pendingSessionLoadTraceRef.current;
+    if (!trace) return;
+    pendingSessionLoadTraceRef.current = null;
+    markSessionLoadPhase(trace, "react-commit");
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => finishSessionLoadTrace(trace));
+    });
+  }, [messages]);
 
   const contextGenRef = useRef(0);
 
-  const loadContext = useCallback(async (sid: string, leafId: string | null) => {
-    // ISSUE-007: only apply the latest navigation result
-    const gen = ++contextGenRef.current;
+  const loadContext = useCallback(
+    async (sid: string, leafId: string | null) => {
+      // ISSUE-007: only apply the latest navigation result
+      const gen = ++contextGenRef.current;
+      historyGenerationRef.current += 1;
+      olderRequestRef.current = null;
+      setLoadingOlder(false);
+      try {
+        const d = await getSessionContext(sid, leafId ?? undefined, {
+          maxTurns: INITIAL_HISTORY_TURNS,
+          maxBytes: HISTORY_PAGE_MAX_BYTES,
+        });
+        if (gen !== contextGenRef.current) return;
+        commitHistory(d.context.messages, d.context.entryIds ?? []);
+        updatePagingState(d.context.historyRevision, d.context.previousCursor);
+      } catch (e) {
+        if (gen !== contextGenRef.current) return;
+        console.error("Failed to load context:", e);
+      }
+    },
+    [commitHistory, updatePagingState],
+  );
+
+  const loadOlder = useCallback(async () => {
+    const sid = sessionIdRef.current;
+    const cursor = previousCursorRef.current;
+    const revision = historyRevisionRef.current;
+    if (!sid || !cursor || !revision || olderRequestRef.current === cursor) return;
+    const generation = historyGenerationRef.current;
+    const startedAt = performance.now();
+    let outcome = "ok";
+    const scrollElement = scrollContainerRef.current;
+    const previousScrollHeight = scrollElement?.scrollHeight ?? 0;
+    const previousScrollTop = scrollElement?.scrollTop ?? 0;
+    olderRequestRef.current = cursor;
+    setLoadingOlder(true);
     try {
-      const d = await getSessionContext(sid, leafId ?? undefined, messageLimitRef.current);
-      if (gen !== contextGenRef.current) return;
-      setMessages(d.context.messages as AgentMessage[]);
-      setEntryIds(d.context.entryIds ?? []);
-    } catch (e) {
-      if (gen !== contextGenRef.current) return;
-      console.error("Failed to load context:", e);
+      const page = await getSessionContextPage(sid, cursor, INITIAL_HISTORY_TURNS, HISTORY_PAGE_MAX_BYTES);
+      if (
+        generation !== historyGenerationRef.current ||
+        sid !== sessionIdRef.current ||
+        revision !== historyRevisionRef.current
+      ) {
+        outcome = "discarded";
+        return;
+      }
+      if (page.context.historyRevision !== revision) {
+        outcome = "revision-reset";
+        await loadSession(sid, false, false, true);
+        return;
+      }
+      const prepended = prependHistoryPage(
+        {
+          messages: loadedMessagesRef.current,
+          entryIds: loadedEntryIdsRef.current,
+          revision,
+          previousCursor: previousCursorRef.current,
+        },
+        page.context,
+      );
+      if (!prepended) {
+        outcome = "revision-reset";
+        await loadSession(sid, false, false, true);
+        return;
+      }
+      commitHistory(prepended.messages, prepended.entryIds);
+      updatePagingState(revision, prepended.previousCursor ?? undefined);
+      requestAnimationFrame(() => {
+        const current = scrollContainerRef.current;
+        if (!current || current !== scrollElement) return;
+        current.scrollTop = previousScrollTop + (current.scrollHeight - previousScrollHeight);
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("STALE_CURSOR")) {
+        outcome = "stale-reset";
+        await loadSession(sid, false, false, true);
+      } else {
+        outcome = "error";
+        console.error("Failed to load older session history:", error);
+      }
+    } finally {
+      if (olderRequestRef.current === cursor) olderRequestRef.current = null;
+      if (generation === historyGenerationRef.current) setLoadingOlder(false);
+      logSessionPerformanceEvent("history-page", {
+        outcome,
+        totalMs: Math.round((performance.now() - startedAt) * 10) / 10,
+      });
     }
-  }, []);
+  }, [commitHistory, loadSession, updatePagingState]);
+
+  const loadDeferredContent = useCallback(
+    async (entryId: string, blockIndex = 0) => {
+      const sid = sessionIdRef.current;
+      if (!sid) return;
+      const generation = historyGenerationRef.current;
+      const cacheKey = `${sid}:${entryId}:${blockIndex}`;
+      let loadedContent = deferredContentCacheRef.current.get(cacheKey);
+      if (loadedContent === undefined) {
+        let request = deferredContentRequestRef.current.get(cacheKey);
+        if (!request) {
+          request = getSessionEntryContent(sid, entryId, blockIndex).then((result) => result.content);
+          deferredContentRequestRef.current.set(cacheKey, request);
+        }
+        try {
+          loadedContent = await request;
+        } finally {
+          deferredContentRequestRef.current.delete(cacheKey);
+        }
+        const cache = deferredContentCacheRef.current;
+        cache.delete(cacheKey);
+        cache.set(cacheKey, loadedContent);
+        while (cache.size > DEFERRED_CONTENT_CACHE_SIZE) cache.delete(cache.keys().next().value!);
+      }
+      if (generation !== historyGenerationRef.current || sid !== sessionIdRef.current) return;
+      const nextMessages = loadedMessagesRef.current.map((message, messageIndex) => {
+        if (loadedEntryIdsRef.current[messageIndex] !== entryId || !Array.isArray(message.content)) return message;
+        const content = message.content.map((block, index) => {
+          if (index !== blockIndex || !("deferredContent" in block)) return block;
+          return loadedContent;
+        });
+        return { ...message, content } as AgentMessage;
+      });
+      commitHistory(nextMessages, loadedEntryIdsRef.current);
+    },
+    [commitHistory],
+  );
 
   const loadTools = useCallback(
     async (sid: string) => {
@@ -1270,12 +1447,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, [isCompacting, loadSession]);
 
-  const loadModels = useCallback(
-    async (signal?: AbortSignal) => {
-      const modelCwd = newSessionCwd ?? session?.cwd ?? "";
-      if (signal?.aborted) return;
-      const d = await listModels(modelCwd || undefined);
-      if (signal?.aborted) return;
+  const applyModelsResult = useCallback(
+    (d: ModelsListResult) => {
       const nextList: ModelEntry[] = d.models ?? [];
       const nameMap = d.nameMap ?? {};
       setModelNames(
@@ -1286,6 +1459,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setModelThinkingLevels(d.thinkingLevels ?? {});
       setModelThinkingLevelMaps(d.thinkingLevelMaps ?? {});
       setModelList(nextList);
+      setModelCatalog(d.catalog);
       if (isNew) {
         const match = d.defaultModel
           ? nextList.find((m) => m.id === d.defaultModel?.modelId && m.provider === d.defaultModel?.provider)
@@ -1294,8 +1468,52 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         setNewSessionDefaultModel(displayModel ? { provider: displayModel.provider, modelId: displayModel.id } : null);
       }
     },
-    [isNew, newSessionCwd, session?.cwd],
+    [isNew],
   );
+
+  const loadModels = useCallback(
+    async (signal?: AbortSignal) => {
+      const modelCwd = newSessionCwd ?? session?.cwd ?? "";
+      if (signal?.aborted) return;
+      const d = await listModels(modelCwd || undefined);
+      if (signal?.aborted) return;
+      applyModelsResult(d);
+    },
+    [applyModelsResult, newSessionCwd, session?.cwd],
+  );
+
+  const cancelModelRefresh = useCallback(() => {
+    const requestId = modelRefreshRequestRef.current;
+    if (!requestId) return;
+    modelRefreshRequestRef.current = null;
+    setModelRefreshing(false);
+    void cancelModelsRefresh(requestId).catch(() => {});
+  }, []);
+
+  const refreshModels = useCallback(async () => {
+    const previousRequestId = modelRefreshRequestRef.current;
+    if (previousRequestId) void cancelModelsRefresh(previousRequestId).catch(() => {});
+    const requestId = `models_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+    modelRefreshRequestRef.current = requestId;
+    setModelRefreshing(true);
+    const modelCwd = newSessionCwd ?? session?.cwd ?? "";
+    try {
+      const result = await requestModelsRefresh(modelCwd || undefined, requestId);
+      if (modelRefreshRequestRef.current !== requestId) return;
+      applyModelsResult(result);
+    } catch {
+      if (modelRefreshRequestRef.current !== requestId) return;
+      addNotice({
+        type: "error",
+        message: "Unable to refresh the model directory. Cached models remain available.",
+      });
+    } finally {
+      if (modelRefreshRequestRef.current === requestId) {
+        modelRefreshRequestRef.current = null;
+        setModelRefreshing(false);
+      }
+    }
+  }, [addNotice, applyModelsResult, newSessionCwd, session?.cwd]);
 
   const handleBuiltinSlashCommand = useCallback(
     async (text: string): Promise<BuiltinSlashCommandResult> => {
@@ -1567,6 +1785,17 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   useEffect(() => {
     let disposed = false;
     let unsubscribeLiveSync: (() => void) | undefined;
+    historyGenerationRef.current += 1;
+    historyRevisionRef.current = null;
+    previousCursorRef.current = null;
+    loadedMessagesRef.current = [];
+    loadedEntryIdsRef.current = [];
+    olderRequestRef.current = null;
+    deferredContentCacheRef.current.clear();
+    deferredContentRequestRef.current.clear();
+    setHistoryRevision(null);
+    setPreviousCursor(null);
+    setLoadingOlder(false);
     if (session) {
       sessionIdRef.current = session.id;
 
@@ -1593,7 +1822,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (!disposed) console.error("Failed to subscribe to active session updates:", cause);
         });
 
-      void loadSession(session.id, true, true).then((agentState) => {
+      void loadSession(session.id, true, true, true).then((agentState) => {
         if (disposed) return;
         if (agentState?.running) {
           void loadTools(session.id);
@@ -1624,6 +1853,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
     return () => {
       disposed = true;
+      historyGenerationRef.current += 1;
       unsubscribeLiveSync?.();
       eventUnsubRef.current?.();
       eventUnsubRef.current = null;
@@ -1696,6 +1926,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     return () => controller.abort();
   }, [loadModels, modelsRefreshKey]);
 
+  useEffect(() => cancelModelRefresh, [cancelModelRefresh, newSessionCwd, session?.cwd]);
+
   // Compact error auto-dismiss
   useEffect(() => {
     if (!compactError) return;
@@ -1730,15 +1962,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     setSessionStatsOverride(null);
   }, [messages.length, contextUsage?.tokens, contextUsage?.percent, contextUsage?.contextWindow]);
 
-  const loadOlderMessages = useCallback(async () => {
-    const next = messageLimitRef.current + MESSAGE_PAGE_SIZE;
-    messageLimitRef.current = next;
-    setMessageLimit(next);
-    if (sessionIdRef.current) {
-      await loadSession(sessionIdRef.current, false, true);
-    }
-  }, [loadSession]);
-
   return {
     // State
     data,
@@ -1751,6 +1974,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     agentRunning,
     modelNames,
     modelList,
+    modelCatalog,
+    modelRefreshing,
     modelThinkingLevels,
     modelThinkingLevelMaps,
     newSessionModel,
@@ -1769,9 +1994,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     slashCommands,
     slashCommandsLoading,
     queuedMessages,
-    messageLimit,
-    hasOlderMessages,
-    totalMessageCount,
+    hasOlder: previousCursor !== null,
+    loadingOlder,
+    historyRevision,
     notices: noticeState.visible,
     extensionDialog,
     extensionCustomUi,
@@ -1797,6 +2022,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     handleFork,
     handleNavigate,
     handleModelChange,
+    refreshModels,
+    cancelModelRefresh,
     handleCompact,
     handleSteer,
     handleFollowUp,
@@ -1808,7 +2035,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     handleThinkingLevelChange,
     loadTools,
     loadSlashCommands,
-    loadOlderMessages,
+    loadOlder,
+    loadDeferredContent,
     setActiveLeafId,
     setData,
     setMessages,

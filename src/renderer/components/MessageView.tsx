@@ -40,6 +40,7 @@ interface Props {
   onEditContent?: (content: string) => void;
   showTimestamp?: boolean;
   prevTimestamp?: number;
+  onLoadDeferredContent?: (entryId: string, blockIndex?: number) => Promise<void>;
 }
 
 function formatTime(ts?: number): string | null {
@@ -58,6 +59,64 @@ function formatTime(ts?: number): string | null {
   return `${date} ${time}`;
 }
 
+function formatByteSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 102.4) / 10} KB`;
+  return `${Math.round(bytes / 1024 / 102.4) / 10} MB`;
+}
+
+function DeferredContentActions({
+  content,
+  onLoad,
+}: {
+  content: unknown;
+  onLoad?: (entryId: string, blockIndex?: number) => Promise<void>;
+}) {
+  const [loadingKey, setLoadingKey] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState(false);
+  if (!onLoad || !Array.isArray(content)) return null;
+  const references = content.flatMap((block) => {
+    if (!block || typeof block !== "object") return [];
+    const deferred = (block as AssistantContentBlock | TextContent | ImageContent).deferredContent;
+    return deferred ? [deferred] : [];
+  });
+  if (references.length === 0) return null;
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+      {references.map((reference) => {
+        const key = `${reference.entryId}:${reference.blockIndex ?? 0}`;
+        const loading = loadingKey === key;
+        return (
+          <button
+            key={key}
+            type="button"
+            disabled={loading}
+            onClick={() => {
+              setLoadingKey(key);
+              setLoadError(false);
+              void onLoad(reference.entryId, reference.blockIndex)
+                .catch(() => setLoadError(true))
+                .finally(() => setLoadingKey(null));
+            }}
+            style={{
+              border: "1px solid var(--border)",
+              borderRadius: 6,
+              background: "var(--bg-panel)",
+              color: "var(--accent)",
+              cursor: loading ? "default" : "pointer",
+              fontSize: 11,
+              padding: "4px 8px",
+            }}
+          >
+            {loading ? "Loading full content…" : `Load full content (${formatByteSize(reference.originalBytes)})`}
+          </button>
+        );
+      })}
+      {loadError && <span style={{ color: "var(--danger)", fontSize: 11 }}>Failed to load full content</span>}
+    </div>
+  );
+}
+
 export function MessageView({
   message,
   isStreaming,
@@ -73,6 +132,7 @@ export function MessageView({
   onEditContent,
   showTimestamp,
   prevTimestamp,
+  onLoadDeferredContent,
 }: Props) {
   if (message.role === "user") {
     return (
@@ -86,6 +146,7 @@ export function MessageView({
         onNavigate={onNavigate}
         prevAssistantEntryId={prevAssistantEntryId}
         onEditContent={onEditContent}
+        onLoadDeferredContent={onLoadDeferredContent}
       />
     );
   }
@@ -100,6 +161,7 @@ export function MessageView({
         onOpenFile={onOpenFile}
         showTimestamp={showTimestamp}
         prevTimestamp={prevTimestamp}
+        onLoadDeferredContent={onLoadDeferredContent}
       />
     );
   }
@@ -109,9 +171,21 @@ export function MessageView({
   }
   if (message.role === "custom") {
     if ((message as CustomMessage).customType === "compaction") {
-      return <CompactionMessageView message={message as CustomMessage} />;
+      return (
+        <>
+          <CompactionMessageView message={message as CustomMessage} />
+          <DeferredContentActions content={message.content} onLoad={onLoadDeferredContent} />
+        </>
+      );
     }
-    return <CustomMessageView message={message as CustomMessage} cwd={cwd} onOpenFile={onOpenFile} />;
+    return (
+      <CustomMessageView
+        message={message as CustomMessage}
+        cwd={cwd}
+        onOpenFile={onOpenFile}
+        onLoadDeferredContent={onLoadDeferredContent}
+      />
+    );
   }
   return null;
 }
@@ -126,6 +200,7 @@ function UserMessageView({
   onNavigate,
   prevAssistantEntryId,
   onEditContent,
+  onLoadDeferredContent,
 }: {
   message: UserMessage;
   cwd?: string;
@@ -136,6 +211,7 @@ function UserMessageView({
   onNavigate?: (entryId: string) => void;
   prevAssistantEntryId?: string;
   onEditContent?: (content: string) => void;
+  onLoadDeferredContent?: (entryId: string, blockIndex?: number) => Promise<void>;
 }) {
   const { t } = useI18n();
   const [hovered, setHovered] = useState(false);
@@ -150,7 +226,9 @@ function UserMessageView({
           .join("\n");
 
   const imageBlocks: ImageContent[] =
-    typeof message.content === "string" ? [] : message.content.filter((b): b is ImageContent => b.type === "image");
+    typeof message.content === "string"
+      ? []
+      : message.content.filter((b): b is ImageContent => b.type === "image" && !b.deferredContent);
 
   const visibleContent =
     message.channelSource && content === CHANNEL_ATTACHMENT_PROMPT_PLACEHOLDER
@@ -237,6 +315,7 @@ function UserMessageView({
               {visibleContent}
             </MarkdownBody>
           )}
+          <DeferredContentActions content={message.content} onLoad={onLoadDeferredContent} />
         </div>
       </div>
 
@@ -444,6 +523,7 @@ function AssistantMessageView({
   onOpenFile,
   showTimestamp,
   prevTimestamp,
+  onLoadDeferredContent,
 }: {
   message: AssistantMessage;
   isStreaming?: boolean;
@@ -453,6 +533,7 @@ function AssistantMessageView({
   onOpenFile?: (filePath: string) => void;
   showTimestamp?: boolean;
   prevTimestamp?: number;
+  onLoadDeferredContent?: (entryId: string, blockIndex?: number) => Promise<void>;
 }) {
   const { t } = useI18n();
   const time = showTimestamp ? formatTime(message.timestamp) : null;
@@ -667,8 +748,10 @@ function AssistantMessageView({
             toolCallDurations={toolCallDurations}
             cwd={cwd}
             onOpenFile={onOpenFile}
+            onLoadDeferredContent={onLoadDeferredContent}
           />
         ))}
+        <DeferredContentActions content={message.content} onLoad={onLoadDeferredContent} />
         {failureDetail && !isStreaming && (
           <div
             role="alert"
@@ -780,6 +863,7 @@ function BlockView({
   toolCallDurations,
   cwd,
   onOpenFile,
+  onLoadDeferredContent,
 }: {
   block: AssistantContentBlock;
   toolResults?: Map<string, ToolResultMessage>;
@@ -788,18 +872,29 @@ function BlockView({
   toolCallDurations?: Map<string, number>;
   cwd?: string;
   onOpenFile?: (filePath: string) => void;
+  onLoadDeferredContent?: (entryId: string, blockIndex?: number) => Promise<void>;
 }) {
   if (block.type === "text") {
     return <TextBlock block={block as TextContent} isStreaming={isStreaming} cwd={cwd} onOpenFile={onOpenFile} />;
   }
   if (block.type === "thinking") {
-    return <ThinkingBlock block={block as ThinkingContent} duration={streamingDuration} />;
+    return (
+      <>
+        <ThinkingBlock block={block as ThinkingContent} duration={streamingDuration} />
+        <DeferredContentActions content={[block]} onLoad={onLoadDeferredContent} />
+      </>
+    );
   }
   if (block.type === "toolCall") {
     const tc = block as ToolCallContent;
     const result = toolResults?.get(tc.toolCallId);
     const duration = toolCallDurations?.get(tc.toolCallId);
-    return <ToolCallBlock block={tc} result={result} duration={duration} />;
+    return (
+      <>
+        <ToolCallBlock block={tc} result={result} duration={duration} onLoadDeferredContent={onLoadDeferredContent} />
+        <DeferredContentActions content={[block]} onLoad={onLoadDeferredContent} />
+      </>
+    );
   }
   return null;
 }
@@ -901,12 +996,15 @@ function ToolCallBlock({
   block,
   result,
   duration,
+  onLoadDeferredContent,
 }: {
   block: ToolCallContent;
   result?: ToolResultMessage;
   duration?: number;
+  onLoadDeferredContent?: (entryId: string, blockIndex?: number) => Promise<void>;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const { t } = useI18n();
   const inputStr = JSON.stringify(block.input, null, 2);
   const isEditTool = isEditToolName(block.toolName);
   const resultDiff = result && !result.isError ? getResultDiff(result) : null;
@@ -922,6 +1020,9 @@ function ToolCallBlock({
   const isError = result?.isError ?? false;
   const isRunning = !result;
   const preview = getToolPreview(block);
+  const browserTabId = isBrowserToolName(block.toolName) ? browserTabIdFromResult(resultText) : null;
+  const browserSummary =
+    isBrowserToolName(block.toolName) && resultText && !isError ? browserResultSummary(resultText, t) : null;
 
   return (
     <div
@@ -1026,9 +1127,105 @@ function ToolCallBlock({
             </div>
           )
         ) : (
-          <PairedResult text={resultText ?? ""} isEmpty={resultIsEmpty} isError={isError} collapsed={!expanded} />
+          <PairedResult
+            text={!expanded && browserSummary ? browserSummary : (resultText ?? "")}
+            isEmpty={resultIsEmpty}
+            isError={isError}
+            collapsed={!expanded}
+          />
         ))}
+      {result && <DeferredContentActions content={result.content} onLoad={onLoadDeferredContent} />}
+      {browserTabId && (
+        <button
+          type="button"
+          onClick={() =>
+            window.dispatchEvent(new CustomEvent("pi-desktop:open-browser-tab", { detail: { tabId: browserTabId } }))
+          }
+          style={{
+            width: "100%",
+            minHeight: 30,
+            border: "none",
+            borderTop: "1px solid var(--tool-border)",
+            background: "transparent",
+            color: "var(--accent)",
+            cursor: "pointer",
+            fontSize: 11,
+            textAlign: "left",
+            padding: "0 12px",
+          }}
+        >
+          Open in Browser →
+        </button>
+      )}
     </div>
+  );
+}
+
+function isBrowserToolName(value: string): boolean {
+  return value.startsWith("browser_");
+}
+
+function browserTabIdFromResult(value: string | null): string | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as { tabId?: unknown; id?: unknown };
+    const tabId = typeof parsed.tabId === "string" ? parsed.tabId : typeof parsed.id === "string" ? parsed.id : null;
+    return tabId && tabId.length <= 128 ? tabId : null;
+  } catch {
+    return null;
+  }
+}
+
+function browserResultSummary(value: string, t: (key: string, fallback: string) => string): string | null {
+  try {
+    const parsed = JSON.parse(value) as Record<string, unknown>;
+    if (typeof parsed.inspectionId === "string" && typeof parsed.changed === "boolean") {
+      const truncated = isRecord(parsed.truncated)
+        ? Object.entries(parsed.truncated)
+            .filter(([, entry]) => entry === true)
+            .map(([key]) => key)
+            .join(", ")
+        : "";
+      return parsed.changed
+        ? formatBrowserSummary(t("browserToolInspectChanged", "Page changed · generation {generation}{truncated}"), {
+            generation: Number(parsed.generation ?? 0),
+            truncated: truncated ? ` · truncated: ${truncated}` : "",
+          })
+        : formatBrowserSummary(t("browserToolInspectUnchanged", "Page unchanged · generation {generation}"), {
+            generation: Number(parsed.generation ?? 0),
+          });
+    }
+    if (typeof parsed.differenceRatio === "number") {
+      return formatBrowserSummary(t("browserToolVisualDifference", "Visual difference: {percent}% · {pixels} pixels"), {
+        percent: (parsed.differenceRatio * 100).toFixed(3),
+        pixels: Number(parsed.differentPixels ?? 0).toLocaleString(),
+      });
+    }
+    if (typeof parsed.total === "number" && typeof parsed.failed === "number" && isRecord(parsed.byResourceType)) {
+      return formatBrowserSummary(
+        t("browserToolNetworkSummary", "Network: {total} requests · {failed} failed · {pending} pending"),
+        {
+          total: parsed.total,
+          failed: parsed.failed,
+          pending: Number(parsed.pending ?? 0),
+        },
+      );
+    }
+    if (Array.isArray(parsed.entries)) {
+      return formatBrowserSummary(t("browserToolConsoleSummary", "Console: {count} entries{truncated}"), {
+        count: parsed.entries.length,
+        truncated: parsed.truncated === true ? " · more available" : "",
+      });
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function formatBrowserSummary(template: string, values: Record<string, string | number>): string {
+  return template.replace(/\{([A-Za-z][A-Za-z0-9]*)\}/g, (match, key: string) =>
+    values[key] === undefined ? match : String(values[key]),
   );
 }
 
@@ -1339,6 +1536,7 @@ function PairedResult({
 function CompactionMessageView({ message }: { message: CustomMessage }) {
   const summary = getMessageText(message.content);
   const parsedSummary = useMemo(() => parseCompactionSummary(summary), [summary]);
+  const [expanded, setExpanded] = useState(false);
   const time = formatTime(message.timestamp);
 
   return (
@@ -1351,35 +1549,58 @@ function CompactionMessageView({ message }: { message: CustomMessage }) {
           background: "var(--bg)",
         }}
       >
-        <div
+        <button
+          type="button"
+          className="compaction-summary-toggle"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+          title={expanded ? "Collapse compaction summary" : "Expand compaction summary"}
           style={{
             display: "flex",
             alignItems: "center",
             gap: 8,
             padding: "7px 10px",
-            borderBottom: "1px solid var(--border)",
+            borderBottom: expanded ? "1px solid var(--border)" : "none",
             background: "var(--bg-panel)",
             color: "var(--text-muted)",
           }}
         >
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 12 12"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+            style={{
+              flexShrink: 0,
+              transform: expanded ? "rotate(90deg)" : "none",
+              transition: "transform 0.15s",
+            }}
+          >
+            <polyline points="4 2.5 7.5 6 4 9.5" />
+          </svg>
           <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 650 }}>compaction</span>
+          <span style={{ color: "var(--text)", fontSize: 12, fontWeight: 600 }}>Conversation compacted</span>
           {time && <span style={{ marginLeft: "auto", color: "var(--text-dim)", fontSize: 10 }}>{time}</span>}
-        </div>
+        </button>
 
-        <div style={{ padding: "11px 13px 12px" }}>
-          <div style={{ color: "var(--text)", fontSize: 15, fontWeight: 700, lineHeight: 1.35 }}>
-            Conversation compacted
+        {expanded && (
+          <div style={{ padding: "11px 13px 12px" }}>
+            <div style={{ marginBottom: 10, color: "var(--text)", fontSize: 14, lineHeight: 1.5 }}>
+              The conversation history before this point was compacted into the following summary:
+            </div>
+            {parsedSummary.body ? (
+              <MarkdownBody className="markdown-compaction-message">{parsedSummary.body}</MarkdownBody>
+            ) : (
+              <span style={{ color: "var(--text-dim)", fontSize: 12 }}>(no summary)</span>
+            )}
+            <CompactionFileMetadata readFiles={parsedSummary.readFiles} modifiedFiles={parsedSummary.modifiedFiles} />
           </div>
-          <div style={{ marginTop: 3, marginBottom: 10, color: "var(--text)", fontSize: 14, lineHeight: 1.5 }}>
-            The conversation history before this point was compacted into the following summary:
-          </div>
-          {parsedSummary.body ? (
-            <MarkdownBody className="markdown-compaction-message">{parsedSummary.body}</MarkdownBody>
-          ) : (
-            <span style={{ color: "var(--text-dim)", fontSize: 12 }}>(no summary)</span>
-          )}
-          <CompactionFileMetadata readFiles={parsedSummary.readFiles} modifiedFiles={parsedSummary.modifiedFiles} />
-        </div>
+        )}
       </div>
     </div>
   );
@@ -1419,10 +1640,12 @@ function CustomMessageView({
   message,
   cwd,
   onOpenFile,
+  onLoadDeferredContent,
 }: {
   message: CustomMessage;
   cwd?: string;
   onOpenFile?: (filePath: string) => void;
+  onLoadDeferredContent?: (entryId: string, blockIndex?: number) => Promise<void>;
 }) {
   const isHiddenDisplay = message.display === false;
   const [contentExpanded, setContentExpanded] = useState(!isHiddenDisplay);
@@ -1504,6 +1727,7 @@ function CustomMessageView({
             ) : (
               <span style={{ color: "var(--text-dim)", fontSize: 12 }}>(no message)</span>
             )}
+            <DeferredContentActions content={message.content} onLoad={onLoadDeferredContent} />
           </div>
         ) : (
           <button
@@ -1611,7 +1835,7 @@ function getMessageText(content: CustomMessage["content"] | UserMessage["content
 
 function getMessageImages(content: CustomMessage["content"] | UserMessage["content"]): ImageContent[] {
   if (typeof content === "string") return [];
-  return content.filter((b): b is ImageContent => b.type === "image");
+  return content.filter((b): b is ImageContent => b.type === "image" && !b.deferredContent);
 }
 
 function imageSource(img: ImageContent): string {

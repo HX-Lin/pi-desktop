@@ -16,7 +16,7 @@
 
 [English](./README.en.md) · **简体中文**
 
-[截图](#应用截图) · [功能](#核心能力) · [快速开始](#快速开始) · [架构](#架构设计) · [参与开发](#参与开发) · [路线图](#路线图)
+[下载 v0.1.6](https://github.com/DLYZZT/pi-desktop/releases/tag/v0.1.6) · [截图](#应用截图) · [功能](#核心能力) · [快速开始](#快速开始) · [架构](#架构设计) · [变更记录](https://github.com/DLYZZT/pi-desktop/releases) · [路线图](#路线图)
 
 </div>
 
@@ -51,19 +51,36 @@
 - 支持图片附件、斜杠命令与 `@` 文件引用
 - 对话与输入框使用一致的阅读宽度，右侧文件面板可通过鼠标或键盘调整并记住宽度
 
+### 用户与 Agent 共享的内置浏览器
+
+- 在主界面右侧使用 Electron `WebContentsView` 承载真实 Chromium 页面，支持多 Tab、临时/持久 Profile、登录态、下载、上传和代理
+- Agent 可在独立的 Browser read/interact 授权下执行导航、结构化页面快照、截图、点击、输入、键盘与等待；首次需要时由主窗口弹窗询问，Coding 权限不会隐式开启浏览权限
+- 用户与 Agent 操作同一个页面，并可随时接管；提交、下载、上传、权限和外部协议继续经过本地策略或确认
+- 设置页管理全局默认与具体会话的永久权限，授权弹窗只产生当前会话的临时权限；高级浏览器模式由一个仅本次启动有效的本机开关统一控制
+- 高级浏览器模式整合三层 UA/Client Hints 身份、可信输入、CDP 网络抓包与确认后的写请求重放、JavaScript 经验库和专用高级 Profile；Agent 工具不接收或返回 Cookie value
+- 私网保护当前为明确标记的 best-effort；未部署受控网络沙箱时，Strict 模式会直接拒绝请求
+
 ### 围绕项目工作的文件体验
 
 - 原生选择项目目录，管理 Git 分支与 Worktree
 - 浏览项目文件、打开多标签页、下载或引用文件
-- Markdown、代码高亮、Mermaid、KaTeX 与 Word（`.docx`）文档预览
+- Agent 回复和 Markdown 文件支持代码高亮、Mermaid、KaTeX，并可预览 Word（`.docx`）文档
 - 文件变更监听与 Git 状态感知，让会话始终贴近当前项目
 
 ### 模型与扩展统一管理
 
-- 管理模型提供商和模型配置
+- 内置 Pi Coding Agent 0.84.0，管理模型提供商和模型配置
+- 会话启动优先使用本地模型目录；需要时可显式刷新远程目录，离线、超时或部分 provider 失败时继续保留缓存模型
 - 支持浏览器 OAuth 登录流程
-- 搜索、安装和配置 Skills
+- 搜索、安装和配置 Skills；正常安装沿用 npm 默认并发，遇到网络、超时或 cache lock 故障时使用隔离缓存重试一次
 - 管理 Plugins，并沿用 Pi Agent 的扩展体系
+
+### 跨平台开发工具管理
+
+- 优先发现并验证用户已有的 Node.js/npm、Python、uv、Git/Bash、Bun 和 jq，覆盖 GUI 启动时 PATH 不完整的常见场景
+- 为 Skills、Plugins、Agent Bash、Git/worktree 和搜索工具提供一致的绝对路径与局部执行环境
+- 用户确认后可把 Node.js LTS、CPython、uv、PortableGit、Bun 和 jq 安装到应用私有目录，不修改系统 PATH、Shell 配置或注册表
+- 安装包内置经过清单校验的目标平台 ripgrep 与 fd，保证基础搜索离线可用
 
 ### 微信、Telegram 与飞书/Lark 消息渠道
 
@@ -88,7 +105,9 @@
 
 ### 使用桌面安装包
 
-Pi Agent Desktop 已内置 Pi Coding Agent 运行时。普通用户无需单独安装 Pi CLI、Pi Coding Agent、Node.js 或 npm；安装桌面应用并配置模型提供商后即可使用。
+最新稳定版为 [v0.1.6](https://github.com/DLYZZT/pi-desktop/releases/tag/v0.1.6)，提供 macOS Apple Silicon / Intel、Windows x64 和 Linux x64 安装包。
+
+Pi Agent Desktop v0.1.6 已内置 Pi Coding Agent 0.84.0 运行时。普通用户使用 Agent 本身无需单独安装 Pi CLI、Pi Coding Agent、Node.js 或 npm；安装桌面应用并配置模型提供商后即可使用。Skills、Plugins 或 Agent 脚本需要额外开发工具时，应用会优先复用健康的系统安装，也可以在用户确认后安装应用私有运行时。
 
 应用会读取 `~/.pi/agent/` 中的会话与配置。如果你已经使用 Pi CLI，可以直接复用现有数据，无需迁移；此前没有使用过 Pi CLI 也不影响使用。
 
@@ -132,10 +151,13 @@ flowchart LR
     Main["Electron Main<br/>窗口 · 托盘 · 协议 · Host 监督"]
     Host["Agent Host / utilityProcess<br/>Pi Agent · 会话 · 文件 · 配置"]
     UI["Renderer<br/>React 19 · Vite"]
+    Browser["Main-owned WebContentsView<br/>远程网页 · Profile · 网络策略"]
     Data["~/.pi/agent/<br/>会话 · 模型 · 配置"]
 
     Main --> Host
     Main --> UI
+    Main --> Browser
+    Host -->|"revisioned Browser RPC"| Main
     UI <-->|"Typed MessagePort IPC"| Host
     Host <--> Data
 ```
@@ -143,6 +165,7 @@ flowchart LR
 - **Main**：负责窗口生命周期、菜单、托盘、通知、软件更新、自定义协议和 Agent Host 监督
 - **Agent Host**：在独立 `utilityProcess` 中运行 Pi Coding Agent，处理会话、文件、配置与扩展
 - **Renderer**：运行 React UI，只通过受控的 preload bridge 与 Host 交互
+- **Browser View**：远程网页只进入 Main 创建的沙箱化 `WebContentsView`，不获得应用 preload、Node 或主 Renderer bridge
 - **无本地服务**：生产环境不监听 TCP 端口，也不需要附带 Web Server
 
 ## 数据、安全与隐私
@@ -151,6 +174,7 @@ flowchart LR
 - 应用不会为了 UI 通信额外开放本地网络端口
 - Renderer 开启 Electron sandbox，并使用严格的 Content Security Policy
 - preload 只暴露受控桥接接口，Host RPC 由 TypeScript 契约约束
+- Agent Browser tools 与高级浏览器模式默认关闭；Main 在任何目标工具副作用前按 session、持久策略、临时 grant、lease 和 policy revision 逐次校验
 - 更新客户端只使用正式包内固定的公开 GitHub Release 配置，不接收 Renderer 提供的更新地址或发布凭证
 - 微信和 Telegram 只发起出站 long polling，飞书/Lark 使用出站 WebSocket；均不开放 webhook 或本地监听端口
 - 模型请求的数据处理方式取决于你配置的模型提供商，请同时查看对应服务的隐私政策
@@ -159,19 +183,20 @@ flowchart LR
 
 ### 常用命令
 
-| 命令                         | 说明                                    |
-| ---------------------------- | --------------------------------------- |
-| `npm run dev`                | 启动 Vite、主进程构建监听与 Electron    |
-| `npm run typecheck`          | 执行 TypeScript 类型检查                |
-| `npm run test`               | 运行自动化测试套件                      |
-| `npm run check:contract`     | 检查 API 方法与 Host handler 覆盖关系   |
-| `npm run smoke`              | 运行 Electron 冒烟测试                  |
-| `npm run verify`             | 执行提交前的完整质量检查                |
-| `npm run build`              | 构建 main、preload 与 renderer          |
-| `npm run pack`               | 生成未封装的应用目录                    |
-| `npm run dist`               | 生成当前平台配置的全部架构安装包        |
-| `npm run dist:mac:signed`    | 生成当前 Mac 架构的 Developer ID 签名包 |
-| `npm run dist:mac:notarized` | 生成签名并经 Apple 公证的 macOS 包      |
+| 命令                            | 说明                                    |
+| ------------------------------- | --------------------------------------- |
+| `npm run dev`                   | 启动 Vite、主进程构建监听与 Electron    |
+| `npm run typecheck`             | 执行 TypeScript 类型检查                |
+| `npm run test`                  | 运行自动化测试套件                      |
+| `npm run check:contract`        | 检查 API 方法与 Host handler 覆盖关系   |
+| `npm run smoke`                 | 运行 Electron 冒烟测试                  |
+| `npm run test:browser-electron` | 运行本地 Browser Electron 集成测试      |
+| `npm run verify`                | 执行提交前的完整质量检查                |
+| `npm run build`                 | 构建 main、preload 与 renderer          |
+| `npm run pack`                  | 生成未封装的应用目录                    |
+| `npm run dist`                  | 生成当前平台配置的全部架构安装包        |
+| `npm run dist:mac:signed`       | 生成当前 Mac 架构的 Developer ID 签名包 |
+| `npm run dist:mac:notarized`    | 生成签名并经 Apple 公证的 macOS 包      |
 
 ### 项目结构
 
@@ -203,8 +228,9 @@ npm run verify
 - [x] Windows x64 正式 Release 资产管线（当前不配置代码签名）
 - [x] 首个同时包含 macOS 与 Windows 正式资产的 Release 验收（v0.1.1）
 - [x] 实现主进程稳定版检查、用户确认下载、重启安装和设置界面
+- [x] 实现 Main-owned WebContentsView 内置浏览器、按需 Agent 会话授权和统一高级浏览器模式
 - [x] 完成 updater-enabled 基线到更高版本的 macOS 与 Windows 端到端升级验证
-- [ ] 扩充跨平台 E2E 测试与发布前检查
+- [x] macOS arm64/x64、Windows x64、Linux x64 安装包生产启动 E2E 与发布前检查
 
 ## 与 Pi 生态的关系
 

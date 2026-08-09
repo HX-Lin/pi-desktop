@@ -1,13 +1,16 @@
 import type {
   AgentCommand,
   AgentEvent,
-  ContextInfo,
+  CredentialMutationResult,
   DirEntry,
+  EntryContentResult,
   FileContent,
   FileMeta,
+  HistoryWindow,
   LoginProgressEvent,
   ModelsConfig,
   ModelsListResult,
+  PagedContextInfo,
   ProviderStatus,
   RunningStateEvent,
   SessionDetail,
@@ -57,12 +60,20 @@ export interface Api {
     result: { sessions: SessionInfo[]; runningSessionIds: string[] };
   };
   "sessions.get": {
-    params: { id: string; includeState?: boolean; limit?: number };
+    params: { id: string; includeState?: boolean; traceId?: string; historyWindow?: HistoryWindow };
     result: SessionDetail;
   };
   "sessions.context": {
-    params: { id: string; leafId?: string; limit?: number };
-    result: { context: ContextInfo };
+    params: { id: string; leafId?: string; historyWindow?: HistoryWindow };
+    result: { context: PagedContextInfo };
+  };
+  "sessions.contextPage": {
+    params: { id: string; cursor: string; maxTurns?: number; maxBytes?: number };
+    result: { context: PagedContextInfo };
+  };
+  "sessions.entryContent": {
+    params: { id: string; entryId: string; blockIndex?: number };
+    result: EntryContentResult;
   };
   "sessions.export": {
     params: { id: string; format?: "md" | "json" };
@@ -222,6 +233,14 @@ export interface Api {
     params: { cwd?: string } | void;
     result: ModelsListResult;
   };
+  "models.refresh": {
+    params: { cwd?: string; requestId: string };
+    result: ModelsListResult;
+  };
+  "models.refreshCancel": {
+    params: { requestId: string };
+    result: { ok: true; cancelled: boolean };
+  };
   "modelsConfig.get": { params: void; result: ModelsConfig };
   "modelsConfig.set": { params: ModelsConfig; result: { ok: true } };
   "modelsConfig.test": {
@@ -238,13 +257,13 @@ export interface Api {
   "auth.allProviders": { params: void; result: { providers: ProviderStatus[] } };
   "auth.setApiKey": {
     params: { provider: string; key: string };
-    result: { ok: true };
+    result: CredentialMutationResult;
   };
   "auth.deleteApiKey": {
     params: { provider: string };
-    result: { ok: true };
+    result: CredentialMutationResult;
   };
-  "auth.logout": { params: { provider: string }; result: { ok: true } };
+  "auth.logout": { params: { provider: string }; result: CredentialMutationResult };
   "auth.loginSubmit": {
     params: { provider: string; token: string; code: string };
     result: { ok: true };
@@ -322,7 +341,13 @@ export interface Streams {
   "agent.events": AgentEvent;
   "agent.running": RunningStateEvent;
   "auth.login": LoginProgressEvent;
-  "sessions.changed": { cwd: string | null; sessionId?: string };
+  "sessions.changed": {
+    cwd: string | null;
+    sessionId?: string;
+    session?: SessionInfo;
+    deleted?: boolean;
+    fullRefresh?: boolean;
+  };
   "files.changed": {
     path: string;
     event: "connected" | "change" | "error";

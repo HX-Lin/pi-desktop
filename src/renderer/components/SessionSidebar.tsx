@@ -24,6 +24,7 @@ import {
   type SessionDateGroup,
 } from "@/lib/session-list";
 import { ProjectMenu } from "./ProjectMenu";
+import { applySessionChangedEvent } from "@/lib/session-sidebar-state";
 
 interface Props {
   selectedSessionId: string | null;
@@ -510,8 +511,21 @@ export function SessionSidebar({
     let cancelled = false;
     void import("@/lib/api-client").then(({ subscribeSessionsChanged }) => {
       if (cancelled) return;
-      return subscribeSessionsChanged(() => {
-        void loadSessions(false);
+      return subscribeSessionsChanged((event) => {
+        if (event.fullRefresh || (!event.session && !(event.deleted && event.sessionId))) {
+          void loadSessions(false);
+        } else {
+          setAllSessions((current) => applySessionChangedEvent(current, event) ?? current);
+        }
+        if (event.deleted && event.sessionId) {
+          setUnreadSessionIds((current) => {
+            if (!current.has(event.sessionId!)) return current;
+            const next = new Set(current);
+            next.delete(event.sessionId!);
+            return next;
+          });
+          onSessionDeleted?.(event.sessionId);
+        }
       }).then((u) => {
         if (cancelled) u();
         else unsub = u;
@@ -521,7 +535,7 @@ export function SessionSidebar({
       cancelled = true;
       unsub?.();
     };
-  }, [loadSessions]);
+  }, [loadSessions, onSessionDeleted]);
 
   useEffect(() => {
     const previous = previousRunningSessionIdsRef.current;
