@@ -24,9 +24,14 @@ function shortenPath(p: string): string {
 function sourceLabel(skill: Skill): string {
   const src = skill.sourceInfo?.source;
   const scope = skill.sourceInfo?.scope;
-  if (scope === "user" || src === "user") return "global";
+  // Two buckets: skills that belong to the current project vs skills that are
+  // global (user-level, temporary, or path-based).
   if (scope === "project" || src === "project") return "project";
-  return "path";
+  return "global";
+}
+
+function scopeLabel(t: (key: string, fallback: string) => string, label: string): string {
+  return label === "project" ? t("projectSkills", "Project skills") : t("globalSkills", "Global skills");
 }
 
 function Toggle({ enabled, loading, onToggle }: { enabled: boolean; loading: boolean; onToggle: () => void }) {
@@ -73,6 +78,7 @@ function Toggle({ enabled, loading, onToggle }: { enabled: boolean; loading: boo
 function SkillDetail({
   skill,
   cwd,
+  scopeLabel,
   onToggle,
   toggling,
   saveError,
@@ -80,6 +86,7 @@ function SkillDetail({
 }: {
   skill: Skill;
   cwd: string;
+  scopeLabel: string;
   onToggle: (skill: Skill) => void;
   toggling: boolean;
   saveError: string | null;
@@ -157,7 +164,7 @@ function SkillDetail({
             color: label === "project" ? "rgba(99,102,241,0.8)" : "var(--text-dim)",
           }}
         >
-          {label}
+          {scopeLabel}
         </span>
         <span
           style={{
@@ -789,13 +796,15 @@ export function SkillsConfig({
                 </div>
               ) : (
                 (() => {
-                  const groups: { label: string; skills: typeof skills }[] = [];
-                  for (const grpLabel of ["project", "global", "path"]) {
-                    const grpSkills = skills.filter((s) => sourceLabel(s) === grpLabel);
-                    if (grpSkills.length > 0) groups.push({ label: grpLabel, skills: grpSkills });
+                  const groups: { id: string; label: string; skills: typeof skills }[] = [];
+                  for (const grpId of ["project", "global"]) {
+                    const grpSkills = skills.filter((s) => sourceLabel(s) === grpId);
+                    if (grpSkills.length > 0) {
+                      groups.push({ id: grpId, label: scopeLabel(t, grpId), skills: grpSkills });
+                    }
                   }
-                  return groups.map(({ label: grpLabel, skills: grpSkills }) => (
-                    <div key={grpLabel} style={{ marginBottom: 6 }}>
+                  return groups.map(({ id: grpId, label: grpLabel, skills: grpSkills }) => (
+                    <div key={grpId} style={{ marginBottom: 6 }}>
                       <div
                         style={{
                           padding: "4px 8px 3px",
@@ -927,6 +936,7 @@ export function SkillsConfig({
                 key={selectedSkill.filePath}
                 skill={selectedSkill}
                 cwd={cwd}
+                scopeLabel={scopeLabel(t, sourceLabel(selectedSkill))}
                 onToggle={toggle}
                 toggling={toggling.has(selectedSkill.filePath)}
                 saveError={saveError}

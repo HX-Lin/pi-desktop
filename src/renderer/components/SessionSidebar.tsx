@@ -840,13 +840,6 @@ export function SessionSidebar({
     [onSelectSession],
   );
 
-  const handleNewSession = useCallback(() => {
-    if (!selectedCwd) return;
-    // Generate a temporary UUID client-side — no backend call needed.
-    // Pi will be spawned lazily when the user sends the first message.
-    onNewSession?.(makeTempSessionId(), selectedCwd);
-  }, [selectedCwd, onNewSession]);
-
   const handleNewSessionInProject = useCallback(
     (root: string) => {
       onActivateProject?.(root);
@@ -1023,90 +1016,42 @@ export function SessionSidebar({
           </button>
         </div>
 
-        <button
-          onClick={handleNewSession}
-          disabled={!selectedCwd}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 6,
-            width: "100%",
-            padding: "8px 10px",
-            background: selectedCwd ? "var(--text)" : "var(--bg-hover)",
-            border: "none",
-            color: selectedCwd ? "var(--bg)" : "var(--text-dim)",
-            cursor: selectedCwd ? "pointer" : "not-allowed",
-            borderRadius: 7,
-            fontSize: 12.5,
-            fontWeight: 600,
-            fontFamily: "var(--font-mono)",
-            flexShrink: 0,
-            transition: "opacity 0.12s",
-            opacity: selectedCwd ? 1 : 0.7,
-          }}
-          title={
-            selectedCwd
-              ? `${t("newSessionIn", "New session in selected project")}: ${selectedCwd}`
-              : t("selectProjectFirst", "Select a project first")
-          }
-          onMouseEnter={(e) => {
-            if (!selectedCwd) return;
-            e.currentTarget.style.opacity = "0.9";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.opacity = selectedCwd ? "1" : "0.7";
-          }}
-        >
-          <span style={{ fontSize: 14, lineHeight: 1 }}>+</span>
-          {t("newSession", "new session")}
-        </button>
-
-        {/* CWD picker */}
+        {/* New project — opens the project picker (recent projects, default
+            directory, browse folder, custom path). New sessions live inside
+            each project in the tree below. */}
         <div ref={dropdownRef} style={{ position: "relative" }}>
           <button
             onClick={() => setDropdownOpen((v) => !v)}
-            title={selectedProject ?? selectedCwd ?? ""}
+            title={t("newProject", "New project")}
+            aria-haspopup="listbox"
+            aria-expanded={dropdownOpen}
             style={{
-              width: "100%",
               display: "flex",
               alignItems: "center",
-              padding: "6px 10px",
-              background: selectedCwd ? "var(--bg-hover)" : "var(--accent-soft)",
-              border: selectedCwd ? "1px solid var(--border)" : "1px solid var(--accent-soft-border)",
-              borderRadius: 7,
+              justifyContent: "center",
+              gap: 6,
+              width: "100%",
+              padding: "8px 10px",
+              background: "var(--text)",
+              border: "none",
+              color: "var(--bg)",
               cursor: "pointer",
-              fontSize: 12,
-              color: "var(--text)",
-              textAlign: "left",
-              transition: "border-color 0.15s, background 0.15s",
+              borderRadius: 7,
+              fontSize: 12.5,
+              fontWeight: 600,
+              fontFamily: "var(--font-mono)",
+              flexShrink: 0,
+              transition: "opacity 0.12s",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.opacity = "0.9";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.opacity = "1";
             }}
           >
-            {selectedCwd ? (
-              <PathLabel
-                text={displayCwd(selectedProject ?? selectedCwd, homeDir)}
-                style={{
-                  flex: 1,
-                  fontFamily: "var(--font-mono)",
-                  fontSize: 11,
-                  color: "var(--text)",
-                }}
-              />
-            ) : (
-              <span
-                style={{
-                  flex: 1,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                  fontFamily: "var(--font-mono)",
-                  fontSize: 11,
-                  color: "var(--text-dim)",
-                }}
-              >
-                {initialSessionId && !restoredRef.current ? "" : t("selectProjectEllipsis", "Select project…")}
-              </span>
-            )}
+            <span style={{ fontSize: 14, lineHeight: 1 }}>+</span>
+            {t("newProject", "New project")}
           </button>
 
           <AnimatedDropdown
