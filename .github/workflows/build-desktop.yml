@@ -32,7 +32,7 @@ jobs:
           - name: macOS x64
             runner: macos-15-intel
           - name: Windows x64
-            runner: windows-2025
+            runner: windows-2022
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     steps:
@@ -102,7 +102,7 @@ jobs:
             tool_target: darwin-x64
             artifact: pi-desktop-macos-x64
           - name: Windows x64
-            runner: windows-2025
+            runner: windows-2022
             platform: win
             targets: nsis
             arch: x64
@@ -523,7 +523,7 @@ jobs:
     name: Package Windows x64
     if: github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
     needs: [release-contract]
-    runs-on: windows-2025
+    runs-on: windows-2022
     timeout-minutes: 45
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
