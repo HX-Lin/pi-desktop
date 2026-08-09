@@ -166,6 +166,6 @@ protocols:
 
 publish:
   provider: github
-  owner: DLYZZT
+  owner: HX-Lin
   repo: pi-desktop
   releaseType: draft
