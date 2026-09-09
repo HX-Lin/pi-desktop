@@ -38,12 +38,16 @@ export function createMainWindow(options: CreateMainWindowOptions): BrowserWindo
     transparent: TRANSPARENT,
     backgroundColor: TRANSPARENT ? "#00000000" : BACKGROUND,
     show: false,
+    // Paint the first frame while hidden so ready-to-show fires as soon as
+    // the renderer has something to show (faster window appearance).
+    paintWhenInitiallyHidden: true,
     webPreferences: {
       preload: resolvePreloadPath(options.runtimeMainDirectory),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
       webSecurity: true,
+      backgroundThrottling: false,
     },
   });
 
@@ -67,7 +71,9 @@ export function createMainWindow(options: CreateMainWindowOptions): BrowserWindo
     }
   };
   win.once("ready-to-show", showWin);
-  setTimeout(showWin, 3_000);
+  // Fallback: never leave the window hidden longer than this, even if the
+  // first paint is slow (agent host still connecting, etc.).
+  setTimeout(showWin, 1_500);
 
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/i.test(url) || /^mailto:/i.test(url)) void shell.openExternal(url);

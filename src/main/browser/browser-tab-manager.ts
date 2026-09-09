@@ -92,6 +92,7 @@ type TabRecord = {
   activeAbort?: AbortController;
   pendingActions: Map<AbortController, { code: BrowserErrorCode; message: string } | null>;
   syntheticInput: number;
+  syntheticInputUntil: number;
   bounds?: Electron.Rectangle;
   advancedReady: Promise<void>;
   networkRecorder?: BrowserNetworkRecorder;
@@ -271,6 +272,7 @@ export class BrowserTabManager {
       queue: Promise.resolve(),
       pendingActions: new Map(),
       syntheticInput: 0,
+      syntheticInputUntil: 0,
       advancedReady: Promise.resolve(),
       nativeUserAgent,
       externalProtocolToken: randomUUID(),
@@ -888,11 +890,12 @@ export class BrowserTabManager {
           await abortableDelay(120, signal);
         }
         record.syntheticInput += 1;
+        record.syntheticInputUntil = Date.now() + 3000;
         sendingSyntheticInput = true;
         await this.sendMouseClick(record, point.x, point.y, button, clickCount, signal, modifiers);
-        // Chromium delivers synthetic mouse events asynchronously. Keep the
-        // synthetic-input guard through the next task so they cannot be mistaken
-        // for a local user takeover.
+        // Chromium delivers synthetic mouse events asynchronously; the
+        // syntheticInputUntil window (set with the guard counter) covers any
+        // delayed before-mouse-event so it is not mistaken for a takeover.
         if (node?.role !== "file-upload") await abortableDelay(0, signal);
       } finally {
         if (!record.view.webContents.isDestroyed()) {
@@ -984,6 +987,7 @@ export class BrowserTabManager {
       point.x += frameContext.offsetX;
       point.y += frameContext.offsetY;
       record.syntheticInput += 1;
+      record.syntheticInputUntil = Date.now() + 3000 + text.length * 40;
       const releaseInputFocus = this.cdp.acquire(record.info.id);
       let focusEmulationEnabled = false;
       let usedInsertText = false;
@@ -1024,7 +1028,9 @@ export class BrowserTabManager {
         // then round-trip through the target OOPIF before inserting text.
         await frameContext.frame.executeJavaScript("true");
         for (const character of [...text]) {
-          if (signal.aborted) throw new BrowserError("USER_TOOK_CONTROL", "User took control of the Browser tab");
+          if (signal.aborted) {
+            throw new BrowserError("USER_TOOK_CONTROL", "User took control of the Browser tab");
+          }
           if (/^[\x20-\x7e]$/.test(character)) {
             record.view.webContents.sendInputEvent({ type: "keyDown", keyCode: character });
             record.view.webContents.sendInputEvent({ type: "char", keyCode: character });
@@ -1095,6 +1101,7 @@ export class BrowserTabManager {
       if (viewport.sensitive === true)
         await this.approveSensitiveAction(record, "Coordinate click on a sensitive control");
       record.syntheticInput += 1;
+      record.syntheticInputUntil = Date.now() + 3000;
       try {
         await this.sendMouseClick(record, Math.round(x), Math.round(y), button, clickCount, signal, modifiers);
       } finally {
@@ -1118,6 +1125,7 @@ export class BrowserTabManager {
     const record = this.requireOwnedTab(tabId, sessionId);
     await this.runAction(record, sessionId, "interact", async () => {
       record.syntheticInput += 1;
+      record.syntheticInputUntil = Date.now() + 3000;
       try {
         record.view.webContents.focus();
         record.view.webContents.sendInputEvent({ type: "keyDown", keyCode: key, modifiers });
@@ -1157,6 +1165,7 @@ export class BrowserTabManager {
         await this.cdp.sendCommand(record.info.id, "Emulation.setFocusEmulationEnabled", { enabled: true });
         focusEmulationEnabled = true;
         record.syntheticInput += 1;
+        record.syntheticInputUntil = Date.now() + 3000;
         try {
           record.view.webContents.focus();
           for (let index = 0; index < segments; index += 1) {
@@ -1965,7 +1974,7 @@ export class BrowserTabManager {
   }
 
   private handleUserInput(record: TabRecord): void {
-    if (record.syntheticInput > 0 || record.info.control !== "agent") return;
+    if (record.syntheticInput > 0 || Date.now() < record.syntheticInputUntil || record.info.control !== "agent") return;
     record.pendingFileUpload = undefined;
     record.info.control = "user";
     record.info.generation += 1;

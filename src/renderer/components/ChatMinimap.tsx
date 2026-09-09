@@ -53,6 +53,7 @@ export function ChatMinimap({ messages, streamingMessage, scrollContainer, messa
   const [mouseYRatio, setMouseYRatio] = useState<number | null>(null);
   const draggingRef = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const rafRef = useRef<number | null>(null);
 
   const allMessages = useMemo(
     () => (streamingMessage ? [...messages, streamingMessage] : messages),
@@ -112,20 +113,35 @@ export function ChatMinimap({ messages, streamingMessage, scrollContainer, messa
 
   const updatePositions = useCallback(() => updatePositionsRef.current(), []);
 
+  // Throttle scroll-driven updates to one per animation frame — scroll events
+  // fire at high frequency and updatePositions calls several setState calls
+  // (nodes, ratios), which would otherwise re-render the minimap every event.
+  const scheduleUpdate = useCallback(() => {
+    if (rafRef.current !== null) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      updatePositionsRef.current();
+    });
+  }, []);
+
   useEffect(() => {
     const el = scrollContainer.current;
     if (!el) return;
-    el.addEventListener("scroll", updatePositions, { passive: true });
-    const ro = new ResizeObserver(updatePositions);
+    el.addEventListener("scroll", scheduleUpdate, { passive: true });
+    const ro = new ResizeObserver(scheduleUpdate);
     ro.observe(el);
     // Also observe the scroll content for height changes
     if (el.firstElementChild) ro.observe(el.firstElementChild);
-    updatePositions();
+    updatePositionsRef.current();
     return () => {
-      el.removeEventListener("scroll", updatePositions);
+      el.removeEventListener("scroll", scheduleUpdate);
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
       ro.disconnect();
     };
-  }, [scrollContainer, updatePositions]);
+  }, [scrollContainer, scheduleUpdate]);
 
   // Re-measure when message count changes (new messages arrive)
   useEffect(() => {

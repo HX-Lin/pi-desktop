@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { SyntaxHighlighter, vs, vscDarkPlus } from "@/lib/syntax-highlight";
+import { shouldHighlightCode } from "@/lib/code-highlight-policy";
 import { useTheme } from "@/hooks/useTheme";
 import { MarkdownBody } from "./MarkdownBody";
 import { DOCX_PREVIEW_MAX_BYTES, getFileExt, isAudioPath, isDocumentPreviewPath, isImagePath } from "@/lib/file-types";
@@ -1276,17 +1277,10 @@ function TextFileViewer({ filePath, cwd, sourceSessionId }: Props) {
               {data.content}
             </MarkdownBody>
           </div>
-        ) : (
+        ) : shouldHighlightCode(data.content) ? (
           <SyntaxHighlighter
             language={data.language === "text" ? "plaintext" : data.language}
             style={isDark ? vscDarkPlus : vs}
-            showLineNumbers
-            lineNumberStyle={{
-              color: "var(--text-dim)",
-              fontStyle: "normal",
-              minWidth: "3em",
-              paddingRight: "1em",
-            }}
             customStyle={{
               margin: 0,
               padding: "12px 0",
@@ -1296,11 +1290,35 @@ function TextFileViewer({ filePath, cwd, sourceSessionId }: Props) {
               fontFamily: "var(--font-mono)",
               minHeight: "100%",
             }}
+            showLineNumbers
+            lineNumberStyle={{
+              color: "var(--text-dim)",
+              fontStyle: "normal",
+              minWidth: "3em",
+              paddingRight: "1em",
+            }}
             codeTagProps={{ style: { fontFamily: "var(--font-mono)" } }}
             wrapLongLines={wrapLines}
           >
             {data.content}
           </SyntaxHighlighter>
+        ) : (
+          <pre
+            style={{
+              margin: 0,
+              padding: "12px 14px",
+              fontSize: 13,
+              lineHeight: 1.6,
+              fontFamily: "var(--font-mono)",
+              color: "var(--text)",
+              whiteSpace: "pre",
+              overflow: "auto",
+              minHeight: "100%",
+              boxSizing: "border-box",
+            }}
+          >
+            {data.content}
+          </pre>
         )}
       </div>
     </div>
