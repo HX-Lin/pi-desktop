@@ -1835,6 +1835,16 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
               void waitForPromptSettlement(session.id);
             }
           }
+        } else if (!agentRunningRef.current) {
+          // The session is not actually running and nothing is marked running —
+          // clear any stuck streaming state (e.g. after the agent host
+          // restarted, or a channel turn took over) so the chat input is
+          // usable again. Guarded by agentRunningRef so a freshly started turn
+          // (agent_start just fired, running not yet reported) is never reset.
+          setAgentRunning(false);
+          setAgentPhase(null);
+          setRetryInfo(null);
+          dispatch({ type: "reset" });
         }
         if (agentState?.state) {
           if (agentState.state.isCompacting !== undefined) setIsCompacting(agentState.state.isCompacting);

@@ -85,6 +85,47 @@ export class PiSessionBridge {
     return { hasSession: true, running: getRpcSession(binding.sessionId)?.isRunning() === true };
   }
 
+  /**
+   * Read the most recent displayable messages of the bound session so a phone
+   * can sync what the agent has been doing on the host. Returns plain text
+   * lines (role + first line of content).
+   */
+  async getRecentHistory(binding: ChannelBinding, limit: number): Promise<string> {
+    if (!binding.sessionId) return "当前还没有绑定的会话，发消息后会自动创建。";
+    try {
+      const filePath = await resolveSessionPath(binding.sessionId);
+      if (!filePath) return "找不到该会话的文件。";
+      const entries = SessionManager.open(filePath).getEntries() as unknown as Array<{
+        type?: string;
+        message?: { role?: string; content?: unknown };
+        timestamp?: string | number;
+        customType?: string;
+      }>;
+      const lines: string[] = [];
+      for (const entry of entries) {
+        if (entry.type !== "message" || !entry.message?.role) continue;
+        const role =
+          entry.message.role === "user" ? "你" : entry.message.role === "assistant" ? "Agent" : entry.message.role;
+        const content = entry.message.content;
+        let text = "";
+        if (typeof content === "string") text = content;
+        else if (Array.isArray(content)) {
+          text = content
+            .filter((b: { type?: string; text?: string }) => b.type === "text" && b.text)
+            .map((b: { text: string }) => b.text)
+            .join(" ");
+        }
+        text = text.replace(/\s+/g, " ").trim().slice(0, 120);
+        if (text) lines.push(`${role}：${text}`);
+      }
+      if (lines.length === 0) return "会话还没有可显示的消息。";
+      const recent = lines.slice(-Math.max(1, Math.min(limit, 40)));
+      return ["最近会话历史：", ...recent].join("\n");
+    } catch (error) {
+      return `读取会话历史失败：${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
   async runCommand(
     binding: ChannelBinding,
     command: ExternalSessionCommand,

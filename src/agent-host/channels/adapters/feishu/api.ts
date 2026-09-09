@@ -5,7 +5,7 @@ import * as Lark from "@larksuiteoapi/node-sdk";
 import type { FeishuDomain } from "../../../../shared/channel-types";
 import type { DownloadedInboundAttachment, OutboundAttachment } from "../../types";
 import type { FeishuCard } from "./rich-renderer";
-import type { FeishuBotIdentity, FeishuMenuEvent, FeishuMessageEvent } from "./protocol-types";
+import type { FeishuBotIdentity, FeishuCardActionEvent, FeishuMenuEvent, FeishuMessageEvent } from "./protocol-types";
 
 export const FEISHU_BASE_URL = "https://open.feishu.cn";
 export const LARK_BASE_URL = "https://open.larksuite.com";
@@ -60,6 +60,7 @@ export interface FeishuWsConnection {
 export interface FeishuWsHandlers {
   onMessage(event: FeishuMessageEvent): void;
   onMenu(event: FeishuMenuEvent): void;
+  onCardAction?(event: FeishuCardActionEvent): void;
 }
 
 export interface FeishuAdapterDependencies {
@@ -574,6 +575,9 @@ export function connectFeishuWebSocket(
       },
       "application.bot.menu_v6": (event) => {
         handlers.onMenu(event as FeishuMenuEvent);
+      },
+      "card.action.trigger": (event: unknown) => {
+        handlers.onCardAction?.(event as FeishuCardActionEvent);
       },
     });
 

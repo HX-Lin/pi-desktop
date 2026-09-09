@@ -19,13 +19,22 @@ import { AdapterRegistry } from "./adapter-registry";
 import { channelCommandHelpText, parseChannelCommand, type ParsedChannelCommand } from "./channel-commands";
 import { ChannelConfigStore } from "./config-store";
 import { LaneScheduler } from "./lane-scheduler";
+import { listAllSessions } from "../session-reader";
 import { CHANNEL_MEDIA_MAX_ATTACHMENTS, ChannelMediaStore } from "./media-store";
 import { callMain } from "../parent-rpc";
 import { PiSessionBridge } from "./pi-session-bridge";
 import { evaluateInboundPolicy } from "./policy";
 import { fingerprintSecret, safeChannelError } from "./redaction";
 import { ChannelStateStore } from "./state-store";
-import type { AdapterTurnOutput, ChannelSecret, OutboundAttachment, StagedInboundAttachment } from "./types";
+import type {
+  AdapterTurnOutput,
+  CardActionContext,
+  CardActionReply,
+  ChannelButtonAction,
+  ChannelSecret,
+  OutboundAttachment,
+  StagedInboundAttachment,
+} from "./types";
 import { resolveSessionPath } from "../session-reader";
 import { sessionIndex } from "../session-index";
 
@@ -40,7 +49,7 @@ export type ChannelManagerOptions = {
   dataDirectory?: string;
   registry?: AdapterRegistry;
   secretAccess?: SecretAccess;
-  bridge?: Pick<PiSessionBridge, "getSessionStatus" | "newSession" | "runCommand" | "runTurn">;
+  bridge?: Pick<PiSessionBridge, "getSessionStatus" | "getRecentHistory" | "newSession" | "runCommand" | "runTurn">;
 };
 
 const PAIRING_TTL_MS = 10 * 60_000;
@@ -124,7 +133,10 @@ export class ChannelManager {
   private readonly registry: AdapterRegistry;
   private readonly lanes = new LaneScheduler();
   private readonly media: ChannelMediaStore;
-  private readonly bridge: Pick<PiSessionBridge, "getSessionStatus" | "newSession" | "runCommand" | "runTurn">;
+  private readonly bridge: Pick<
+    PiSessionBridge,
+    "getSessionStatus" | "getRecentHistory" | "newSession" | "runCommand" | "runTurn"
+  >;
   private readonly secretAccess: SecretAccess;
   private readonly runtimes = new Map<string, RuntimeEntry>();
   private readonly statuses = new Map<string, ChannelStatus>();
@@ -320,6 +332,7 @@ export class ChannelManager {
         state: this.state,
         onInbound: (envelope) => this.handleInbound(envelope),
         onStatus: (patch) => this.emitStatus(account, patch),
+        onCardAction: (actionContext) => this.handleCardAction(actionContext),
         log: (message) => this.log(`[${account.id}] ${message}`),
       })
       .catch((error) => {
@@ -562,8 +575,8 @@ export class ChannelManager {
     account: ChannelAccountConfig,
     binding: ChannelBinding,
     command: ParsedChannelCommand,
-  ): Promise<{ finalText: string; sessionId?: string; notifySession?: boolean }> {
-    if (command.name !== "compact" && command.args) {
+  ): Promise<{ finalText: string; sessionId?: string; notifySession?: boolean; actions?: ChannelButtonAction[] }> {
+    if (command.args && !["compact", "project", "session"].includes(command.name)) {
       return { finalText: `用法：/${command.name}` };
     }
 
@@ -579,6 +592,124 @@ export class ChannelManager {
           `会话：${session.hasSession ? "已绑定" : "尚未创建"}`,
           `Agent：${session.running ? "处理中" : "空闲"}`,
           "IM 命令：已启用",
+        ].join("\n"),
+      };
+    }
+
+    if (command.name === "history") {
+      const limit = Number.parseInt(command.args, 10);
+      return {
+        finalText: await this.bridge.getRecentHistory(binding, Number.isFinite(limit) && limit > 0 ? limit : 10),
+      };
+    }
+
+    if (command.name === "projects") {
+      const sessions = await listAllSessions();
+      const projects = new Map<string, { sessionCount: number; latest?: string }>();
+      for (const session of sessions) {
+        const root = session.projectRoot ?? session.cwd;
+        if (!root) continue;
+        const entry = projects.get(root) ?? { sessionCount: 0 };
+        entry.sessionCount += 1;
+        if (!entry.latest || session.modified > entry.latest) entry.latest = session.modified;
+        projects.set(root, entry);
+      }
+      if (projects.size === 0) {
+        return { finalText: "主机上还没有会话。先在本机开始一个对话，或使用 /project 指定项目。" };
+      }
+      const projectName = (root: string) => root.split(/[/\\]/).filter(Boolean).pop() || root;
+      return {
+        finalText: [
+          `**主机上的项目（${projects.size}）**`,
+          ...[...projects.entries()]
+            .map(([root, entry]) => `📁 **${projectName(root)}**\n\`${root}\` · 会话 ${entry.sessionCount} 个`)
+            .slice(0, 8),
+          "点击下方按钮切换项目。",
+        ].join("\n\n"),
+        actions: [...projects.entries()].slice(0, 8).map(([root]) => ({
+          label: `📁 ${projectName(root)}`,
+          value: `project:${root}`,
+        })),
+      };
+    }
+
+    if (command.name === "project") {
+      const arg = command.args.trim();
+      if (!arg) return { finalText: "用法：/project <项目路径>（/projects 查看列表）" };
+      const sessions = await listAllSessions();
+      const match = sessions.find(
+        (session) =>
+          session.cwd === arg ||
+          session.projectRoot === arg ||
+          session.cwd.endsWith(`/${arg}`) ||
+          (session.projectRoot?.endsWith(`/${arg}`) ?? false),
+      );
+      if (!match) return { finalText: "找不到该项目，可用 /projects 查看主机上的项目。" };
+      const root = match.projectRoot ?? match.cwd;
+      binding.cwd = root;
+      binding.sessionId = undefined;
+      binding.lastUsedAt = new Date().toISOString();
+      this.config.upsertBinding(binding);
+      this.server.emit("channels.binding", binding.id, { action: "upsert", bindingId: binding.id, binding });
+      return {
+        finalText: `✅ **已切换到项目**\n\`${root}\`\n发消息即开始新会话；/sessions 可查看并续接已有会话。`,
+      };
+    }
+
+    if (command.name === "sessions") {
+      if (!binding.cwd) return { finalText: "尚未绑定项目。发一条消息或 /project <路径> 切换项目。" };
+      const sessions = (await listAllSessions())
+        .filter((session) => (session.projectRoot ?? session.cwd) === binding.cwd)
+        .sort((a, b) => b.modified.localeCompare(a.modified))
+        .slice(0, 15);
+      if (sessions.length === 0) return { finalText: `项目 ${binding.cwd} 还没有会话。发消息即可创建。` };
+      const current = binding.sessionId;
+      const projectName = binding.cwd.split(/[/\\]/).filter(Boolean).pop() || binding.cwd;
+      return {
+        finalText: [
+          `**会话列表 · ${projectName}**（${sessions.length}）`,
+          ...sessions.map((session) => {
+            const isCurrent = session.id === current;
+            const first = session.firstMessage.replace(/\s+/g, " ").trim().slice(0, 42);
+            const time = session.modified.slice(5, 16).replace("T", " ");
+            const display = session.name || first || "(空会话)";
+            return `${isCurrent ? "🟢" : "⚪"} **${session.name || session.id.slice(0, 8)}**${isCurrent ? "（当前）" : ""}\n  \`${display}\`\n  ${time}`;
+          }),
+          "点击下方按钮切换会话（旧会话继续后台运行）。",
+        ].join("\n\n"),
+        actions: sessions.map((session) => ({
+          label: `${session.id === current ? "🟢" : "⚪"} ${
+            session.name || session.firstMessage.replace(/\s+/g, " ").trim().slice(0, 16) || session.id.slice(0, 8)
+          }`,
+          value: `session:${session.id}`,
+        })),
+      };
+    }
+
+    if (command.name === "session") {
+      const arg = command.args.trim();
+      if (!arg) return { finalText: "用法：/session <会话ID>（/sessions 查看列表）" };
+      const sessions = await listAllSessions();
+      const match = sessions.find((session) => session.id === arg || session.id.startsWith(arg));
+      if (!match) return { finalText: "找不到该会话，可用 /sessions 查看当前项目会话。" };
+      binding.sessionId = match.id;
+      binding.cwd = match.projectRoot ?? match.cwd;
+      binding.lastUsedAt = new Date().toISOString();
+      this.config.upsertBinding(binding);
+      this.server.emit("channels.binding", binding.id, { action: "upsert", bindingId: binding.id, binding });
+      const first = match.firstMessage.replace(/\s+/g, " ").trim().slice(0, 40);
+      // Show the recent history right away so the phone has context of what
+      // this session has been doing on the host.
+      const history = await this.bridge.getRecentHistory(binding, 12);
+      const display = match.name || first || "(空会话)";
+      return {
+        finalText: [
+          `✅ **已切换到会话** ${match.name ? `**${match.name}**` : `\`${match.id.slice(0, 8)}\``}`,
+          `项目：\`${match.cwd}\``,
+          display !== first ? `首条：${first}` : "",
+          "",
+          history,
+          "发消息即可继续；旧会话仍在后台运行。",
         ].join("\n"),
       };
     }
@@ -600,7 +731,7 @@ export class ChannelManager {
 
     const result = await this.bridge.runCommand(
       binding,
-      command.name,
+      command.name as "compact" | "reload",
       command.name === "compact" && command.args ? command.args : undefined,
     );
     return {
@@ -608,6 +739,63 @@ export class ChannelManager {
       notifySession: true,
       finalText: command.name === "compact" ? "当前会话上下文已压缩。" : "已重新加载扩展、Skills、Prompts 和工具。",
     };
+  }
+
+  /**
+   * Handle a card button press from a channel (feishu). Values are
+   * "project:<path>", "session:<id>", "projects", "sessions", "new" or
+   * "history[:N]". Reuses the same resolution as /project and /session.
+   */
+  private async handleCardAction(context: CardActionContext): Promise<CardActionReply | null> {
+    const { account, secret, peerId, value } = context;
+    try {
+      const binding = this.config
+        .listBindings()
+        .find((candidate) => candidate.accountId === account.id && candidate.peerId === peerId);
+      if (!binding) {
+        return { text: "尚未绑定对话。请先给机器人发送一条消息。" };
+      }
+      const runCommand = async (
+        name: string,
+        args = "",
+      ): Promise<{ finalText: string; actions?: ChannelButtonAction[] }> => {
+        const parsed = parseChannelCommand(`/${name}${args ? ` ${args}` : ""}`);
+        if (!parsed) return { finalText: "未知命令。" };
+        return this.handleCommand(account, binding, parsed);
+      };
+
+      if (value.startsWith("project:")) {
+        const reply = await runCommand("project", value.slice("project:".length));
+        return { text: reply.finalText };
+      }
+      if (value.startsWith("session:")) {
+        const reply = await runCommand("session", value.slice("session:".length));
+        return { text: reply.finalText };
+      }
+      if (value === "projects") {
+        const reply = await runCommand("projects");
+        return { text: reply.finalText, actions: reply.actions };
+      }
+      if (value === "sessions") {
+        const reply = await runCommand("sessions");
+        return { text: reply.finalText, actions: reply.actions };
+      }
+      if (value === "new") {
+        const created = await this.bridge.newSession(binding);
+        this.saveBindingSession(binding, created.sessionId);
+        return { text: "已开始新的独立会话，后续消息将使用新的上下文。" };
+      }
+      if (value.startsWith("history")) {
+        const limit = Number.parseInt(value.split(":")[1] ?? "10", 10);
+        return { text: await this.bridge.getRecentHistory(binding, Number.isFinite(limit) && limit > 0 ? limit : 10) };
+      }
+      return { text: `未知按钮操作：${value}` };
+    } catch (error) {
+      this.log(`[${account.id}] card action failed: ${safeChannelError(error)}`);
+      return { text: `处理失败：${safeChannelError(error)}` };
+    } finally {
+      void secret;
+    }
   }
 
   private async handlePairing(
@@ -811,6 +999,7 @@ export class ChannelManager {
               contextToken: envelope.providerContext?.contextToken,
               threadId: envelope.threadId,
               replyToMessageId: envelope.providerContext?.replyToMessageId,
+              ...(turn.actions?.length ? { actions: turn.actions } : {}),
               text,
               runId: envelope.id,
             });

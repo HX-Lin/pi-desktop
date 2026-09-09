@@ -14,7 +14,7 @@ function iconPath(): string {
   return path.join(app.getAppPath(), "build", "icon.png");
 }
 
-export function createTray(getMainWindow: () => BrowserWindow | null): Tray | null {
+export function createTray(getMainWindow: () => BrowserWindow | null, onRestoreWindow?: () => void): Tray | null {
   if (tray) return tray;
   try {
     let image = nativeImage.createFromPath(iconPath());
@@ -31,14 +31,17 @@ export function createTray(getMainWindow: () => BrowserWindow | null): Tray | nu
 
     tray = new Tray(image);
     tray.setToolTip("Pi Agent Desktop");
-    updateTrayMenu(getMainWindow);
+    updateTrayMenu(getMainWindow, onRestoreWindow);
 
     tray.on("click", () => {
       const win = getMainWindow();
-      if (!win) return;
-      if (win.isMinimized()) win.restore();
-      win.show();
-      win.focus();
+      if (win) {
+        if (win.isMinimized()) win.restore();
+        win.show();
+        win.focus();
+        return;
+      }
+      onRestoreWindow?.(); // window closed while sessions keep running
     });
 
     appendMainLog("tray created");
@@ -56,7 +59,7 @@ export function setTrayRunningCount(count: number, getMainWindow: () => BrowserW
   updateTrayMenu(getMainWindow);
 }
 
-function updateTrayMenu(getMainWindow: () => BrowserWindow | null): void {
+function updateTrayMenu(getMainWindow: () => BrowserWindow | null, onRestoreWindow?: () => void): void {
   if (!tray) return;
   const menu = Menu.buildFromTemplate([
     {
@@ -71,6 +74,8 @@ function updateTrayMenu(getMainWindow: () => BrowserWindow | null): void {
         if (win) {
           win.show();
           win.focus();
+        } else {
+          onRestoreWindow?.();
         }
       },
     },
@@ -82,6 +87,8 @@ function updateTrayMenu(getMainWindow: () => BrowserWindow | null): void {
           win.show();
           win.focus();
           win.webContents.send("menu:new-session");
+        } else {
+          onRestoreWindow?.();
         }
       },
     },

@@ -25,6 +25,7 @@ export interface AdapterStartContext {
   onInbound: (envelope: InboundEnvelope) => Promise<void>;
   onStatus: (patch: Partial<ChannelStatus>) => void;
   log: (message: string) => void;
+  onCardAction?: (context: CardActionContext) => Promise<CardActionReply | null>;
 }
 
 export interface AdapterSendContext {
@@ -38,6 +39,28 @@ export interface AdapterSendContext {
   runId?: string;
   /** Optional, explicitly authorized local files. Existing text-only adapters can ignore this capability. */
   attachments?: OutboundAttachment[];
+  /** Optional tappable buttons rendered as an interactive card (feishu). */
+  actions?: ChannelButtonAction[];
+}
+
+/** A tappable command button on a channel card. */
+export interface ChannelButtonAction {
+  label: string;
+  /** Opaque value echoed back on press (e.g. "project:/path", "session:<id>"). */
+  value: string;
+}
+
+/** Context for a card button press routed back to the channel manager. */
+export interface CardActionContext {
+  account: ChannelAccountConfig;
+  secret: ChannelSecret;
+  peerId: string;
+  value: string;
+}
+
+export interface CardActionReply {
+  text: string;
+  actions?: ChannelButtonAction[];
 }
 
 export interface OutboundAttachment {

@@ -330,7 +330,7 @@ test("runtime syncs the opt-in command menu without making menu failures fatal",
   });
   assert.deepEqual(
     commandBody.commands.map((item) => item.command),
-    ["help", "status", "new", "compact", "reload"],
+    ["help", "status", "history", "projects", "project", "sessions", "session", "new", "compact", "reload"],
   );
 
   controller = new globalThis.AbortController();

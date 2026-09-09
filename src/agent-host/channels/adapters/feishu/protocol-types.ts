@@ -60,3 +60,13 @@ export interface FeishuBotIdentity {
   openId: string;
   name: string;
 }
+
+export interface FeishuCardActionEvent {
+  event_id?: string;
+  action?: {
+    value?: Record<string, unknown>;
+    open_id?: string;
+    tag?: string;
+  };
+  operator?: { open_id?: string };
+}

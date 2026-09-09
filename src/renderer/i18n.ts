@@ -315,7 +315,7 @@ const zhCN: Record<string, string> = {
   groupMentionRequired: "群聊触发条件",
   requireMention: "必须 @提及",
   imCommands: "IM 命令",
-  enableImCommands: "启用 /help、/status、/new、/compact 和 /reload",
+  enableImCommands: "启用机器人命令（/help /projects /sessions /history 等，含按钮）",
   defaultTools: "默认工具权限",
   toolPresetNone: "禁用工具（推荐）",
   toolPresetRead: "只读工具",

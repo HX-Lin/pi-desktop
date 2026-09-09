@@ -293,7 +293,7 @@ void app.whenReady().then(async () => {
     },
     recoverFromInstallFailure: () => {
       isQuitting = false;
-      createTray(getMainWindow);
+      createTray(getMainWindow, () => createWindow());
       const manager = hostManager;
       if (manager) {
         let remainingAttempts = 12;
@@ -399,7 +399,7 @@ void app.whenReady().then(async () => {
   });
   installAppMenu(getMainWindow, () => openUpdateSettings(true));
 
-  createTray(getMainWindow);
+  createTray(getMainWindow, () => createWindow());
 
   // Apply persisted theme preference
   if (ui.theme === "light" || ui.theme === "dark" || ui.theme === "system") {
@@ -528,7 +528,10 @@ app.on("certificate-error", (event, webContents, url, _error, _certificate, call
 });
 
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
+  // Keep the app alive in the background while sessions are still running so
+  // they can finish (tray restores the window; Quit exits for real). Without
+  // running sessions, close = quit as usual.
+  if (process.platform !== "darwin" && runningAgentSessionCount <= 0) {
     app.quit();
   }
 });

@@ -7,6 +7,7 @@ import type {
   InboundEnvelope,
 } from "../../../../shared/channel-types";
 import { splitChannelText } from "../../outbound-renderer";
+import type { ChannelButtonAction } from "../../types";
 import type {
   AdapterSendContext,
   AdapterStartContext,
@@ -26,7 +27,13 @@ import {
   type FeishuRichCardSession,
   type FeishuWsConnection,
 } from "./api";
-import type { FeishuBotIdentity, FeishuMenuEvent, FeishuMessageEvent, FeishuMessageMention } from "./protocol-types";
+import type {
+  FeishuBotIdentity,
+  FeishuCardActionEvent,
+  FeishuMenuEvent,
+  FeishuMessageEvent,
+  FeishuMessageMention,
+} from "./protocol-types";
 import {
   buildFeishuInterruptedCard,
   buildFeishuStreamingCard,
@@ -488,9 +495,42 @@ export class FeishuAdapter implements ChannelAdapter {
         dispatchInbound(eventId, envelope);
       };
 
+      const onCardAction = (event: FeishuCardActionEvent) => {
+        onStatus({ lastEventAt: Date.now() });
+        const operatorId = event.operator?.open_id || event.action?.open_id;
+        const rawValue = event.action?.value?.pi_channel_cmd;
+        const value = typeof rawValue === "string" ? rawValue : "";
+        const eventId = event.event_id?.trim() || `card:${operatorId || "unknown"}:${value.slice(0, 24)}`;
+        if (!operatorId || !value || state.isProcessed(account.id, eventId) || inFlight.has(eventId)) {
+          if (operatorId && value) state.markProcessed(account.id, eventId);
+          return;
+        }
+        inFlight.add(eventId);
+        onStatus({ lastInboundAt: Date.now() });
+        void context
+          .onCardAction?.({ account, secret, peerId: operatorId, value })
+          .then(async (reply) => {
+            if (!reply) return;
+            await this.sendMessage({
+              account,
+              secret,
+              peerId: operatorId,
+              text: reply.text,
+              ...(reply.actions?.length ? { actions: reply.actions } : {}),
+            });
+          })
+          .catch((error) => {
+            context.log(`飞书/Lark 卡片按钮处理失败：${safeChannelError(error)}`);
+          })
+          .finally(() => {
+            state.markProcessed(account.id, eventId);
+            inFlight.delete(eventId);
+          });
+      };
+
       connection = await this.dependencies.connect(
         credential,
-        { onMessage, onMenu },
+        { onMessage, onMenu, onCardAction },
         {
           onError: (error) => {
             terminalError = error;
@@ -565,13 +605,14 @@ export class FeishuAdapter implements ChannelAdapter {
   }
 
   private async sendMessage(context: AdapterSendContext): Promise<DeliveryReceipt> {
-    if (context.runId && this.dependencies.sendCard) {
+    if ((context.runId || context.actions?.length) && this.dependencies.sendCard) {
       const final = new FeishuRichMessageBuilder().renderFinal(context.text);
+      const card = context.actions?.length ? withCardActions(final.card, context.actions) : final.card;
       if (!final.answerTruncated) {
         try {
           const messageId = await this.dependencies.sendCard(credentials(context.account, context.secret), {
             peerId: context.peerId,
-            card: final.card,
+            card,
             ...(context.replyToMessageId ? { replyToMessageId: context.replyToMessageId } : {}),
             ...(context.threadId ? { replyInThread: true } : {}),
           });
@@ -651,4 +692,43 @@ export class FeishuAdapter implements ChannelAdapter {
       return { ok: false, accountId: account.id, message: safeChannelError(error) };
     }
   }
+}
+
+/**
+ * Append tappable buttons to a Feishu card so a phone can switch
+ * projects/sessions. Schema V2 cards no longer support the legacy `action`
+ * wrapper — buttons are top-level `button` elements (paired two per row via
+ * column_set so the card stays compact).
+ */
+function withCardActions(card: FeishuCard, actions: ChannelButtonAction[]): FeishuCard {
+  const body = card.body as { elements?: unknown[] } | undefined;
+  const button = (action: ChannelButtonAction, index: number) => ({
+    tag: "button",
+    element_id: `pi_btn_${index}`,
+    text: { tag: "plain_text", content: action.label },
+    type: "default",
+    value: { pi_channel_cmd: action.value },
+  });
+  const rows: unknown[] = [];
+  for (let i = 0; i < actions.length; i += 2) {
+    const rowActions = actions.slice(i, i + 2).map(button as never);
+    rows.push({
+      tag: "column_set",
+      flex_mode: "none",
+      background_style: "grey",
+      horizontal_spacing: "8px",
+      columns: rowActions.map((actionButton: unknown) => ({
+        tag: "column",
+        width: "weighted",
+        weight: 1,
+        vertical_align: "center",
+        elements: [actionButton],
+      })),
+    });
+  }
+  const nextBody = {
+    ...(body ?? {}),
+    elements: [...(body?.elements ?? []), ...rows],
+  };
+  return { ...card, body: nextBody as FeishuCard["body"] };
 }
