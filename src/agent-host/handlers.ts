@@ -59,6 +59,7 @@ import {
   resolveProject,
 } from "../shared/worktree";
 import { buildEntriesFromFiles, filterFileEntries } from "../shared/file-fuzzy";
+import { BUILTIN_PROVIDER_EXTENSIONS } from "./builtin-providers";
 import {
   DOCX_PREVIEW_MAX_BYTES,
   IMAGE_PREVIEW_MAX_BYTES,
@@ -1127,7 +1128,11 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
     "models.list": async (params) => {
       const cwd = resolveModelsCwd(params as { cwd?: string } | void);
       const agentDir = getAgentDir();
-      const services = await createAgentSessionServices({ cwd, agentDir });
+      const services = await createAgentSessionServices({
+        cwd,
+        agentDir,
+        resourceLoaderOptions: { extensionFactories: BUILTIN_PROVIDER_EXTENSIONS },
+      });
       return projectModelsList(services.modelRuntime, services.settingsManager, {
         source: process.env.PI_OFFLINE === undefined ? "cache" : "offline",
         refreshed: false,
@@ -1144,7 +1149,12 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
       const cwd = resolveModelsCwd(params);
       const agentDir = getAgentDir();
       const { services, catalog } = await modelCatalogRefreshCoordinator.refresh(cwd, requestId, (signal) =>
-        createAgentSessionServices({ cwd, agentDir, modelRuntimeSignal: signal }),
+        createAgentSessionServices({
+          cwd,
+          agentDir,
+          modelRuntimeSignal: signal,
+          resourceLoaderOptions: { extensionFactories: BUILTIN_PROVIDER_EXTENSIONS },
+        }),
       );
       return projectModelsList(services.modelRuntime, services.settingsManager, catalog);
     },
@@ -1301,7 +1311,7 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
     "auth.allProviders": async () => {
       const modelRuntime = await getSharedModelRuntime();
       const all = modelRuntime.getModels();
-      const OAUTH_PROVIDER_IDS = new Set(["anthropic", "github-copilot", "openai-codex"]);
+      const EXCLUDED_PROVIDER_IDS = new Set(["anthropic", "github-copilot", "openai-codex"]);
       const seen = new Set<string>();
       const result: Array<{
         id: string;
@@ -1313,9 +1323,9 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
       for (const model of all) {
         if (seen.has(model.provider)) continue;
         seen.add(model.provider);
-        if (OAUTH_PROVIDER_IDS.has(model.provider)) continue;
+        if (EXCLUDED_PROVIDER_IDS.has(model.provider)) continue;
         const provider = modelRuntime.getProvider(model.provider);
-        if (!provider?.auth.apiKey) continue;
+        if (!provider?.auth.apiKey || provider.auth.oauth) continue;
         const status = modelRuntime.getProviderAuthStatus(model.provider);
         if (status.source === "models_json_key") continue;
         result.push({

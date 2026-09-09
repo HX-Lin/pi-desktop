@@ -14,6 +14,7 @@ import type { AgentSessionLike, ExtensionUiContextLike, ToolInfo } from "../shar
 import type { ChannelId } from "../shared/channel-types";
 import type { ExtensionUiRequest, ExtensionUiResponse, ExtensionWidgetItem } from "../shared/types";
 import { toolchainRuntime } from "./toolchain-runtime";
+import { BUILTIN_PROVIDER_EXTENSIONS } from "./builtin-providers";
 import { createToolchainBashOptions } from "./toolchain-bash";
 import { createDesktopSearchToolDefinitions } from "./toolchain-search";
 import {
@@ -1300,7 +1301,11 @@ export async function startRpcSession(
 
     // Build services first so extension-registered providers are available
     // before the SDK restores the saved model from the session file.
-    const services = await createAgentSessionServices({ cwd, agentDir });
+    const services = await createAgentSessionServices({
+      cwd,
+      agentDir,
+      resourceLoaderOptions: { extensionFactories: BUILTIN_PROVIDER_EXTENSIONS },
+    });
     const executionContext = await toolchainRuntime.createExecutionContext({
       cwd,
       intent: "agent-shell",

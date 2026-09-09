@@ -8,7 +8,14 @@ const sourceFiles = ["src/**/*.{ts,tsx}"];
 
 export default tseslint.config(
   {
-    ignores: ["**/.artifacts/**", "**/build/**", "**/dist/**", "**/node_modules/**", "**/out/**"],
+    ignores: [
+      "**/.artifacts/**",
+      "**/build/**",
+      "**/dist/**",
+      "**/node_modules/**",
+      "**/out/**",
+      "src/agent-host/vendor/**",
+    ],
     linterOptions: {
       reportUnusedDisableDirectives: "error",
     },

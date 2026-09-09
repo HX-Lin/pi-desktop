@@ -86,6 +86,22 @@ test("registerHandlers exposes every contract method exactly once", async () => 
   }
 });
 
+test("bundled Qoder providers use OAuth login instead of API key setup", async () => {
+  const { handlers } = await captureHandlers();
+
+  const oauth = await handlers["auth.providers"]();
+  assert.equal(
+    oauth.providers.some((provider) => provider.id === "qoder"),
+    true,
+  );
+
+  const apiKey = await handlers["auth.allProviders"]();
+  assert.equal(
+    apiKey.providers.some((provider) => provider.id === "qoder" || provider.id === "qoder-cn"),
+    false,
+  );
+});
+
 test("credential mutation failures distinguish committed state from an unverified mutation", async () => {
   const { credentialMutationFailure } = await loadHandlersModule();
   const synchronizationError = new CredentialSynchronizationError("test-provider", "setRuntimeApiKey", undefined, {

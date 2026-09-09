@@ -1,6 +1,7 @@
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { ModelsRefreshResult } from "@earendil-works/pi-ai";
 import type { ModelCatalogStatus, ModelCatalogWarning } from "../contract/types";
+import { registerBuiltinProviders } from "./builtin-providers";
 
 export const MODEL_CATALOG_REFRESH_TIMEOUT_MS = 12_000;
 
@@ -152,10 +153,15 @@ let sharedRuntimePromise: Promise<ModelRuntime> | undefined;
  */
 export function getSharedModelRuntime(): Promise<ModelRuntime> {
   if (!sharedRuntimePromise) {
-    sharedRuntimePromise = ModelRuntime.create().catch((error) => {
-      sharedRuntimePromise = undefined;
-      throw error;
-    });
+    sharedRuntimePromise = ModelRuntime.create()
+      .then(async (runtime) => {
+        await registerBuiltinProviders(runtime);
+        return runtime;
+      })
+      .catch((error) => {
+        sharedRuntimePromise = undefined;
+        throw error;
+      });
   }
   return sharedRuntimePromise;
 }
