@@ -490,6 +490,7 @@ const zhCN: Record<string, string> = {
   stopCompaction: "停止压缩",
   compactAutoHint: "当前上下文 {count} 条消息，达到 {threshold} 条将自动压缩为记忆",
   compactAutoRunning: "当前上下文 {count} 条消息，正在自动压缩为记忆",
+  compactHistoryTotal: "（历史累计 {total} 条）",
   compactNow: "压缩为记忆",
   enableCompletionSound: "开启完成提示音",
   disableCompletionSound: "关闭完成提示音",

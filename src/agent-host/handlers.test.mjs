@@ -466,6 +466,7 @@ test("sessions.get returns the contract shape without rescanning known session p
   const withState = await handlers["sessions.get"]({ id: sessionId, includeState: true });
   assert.equal(withState.agentState.running, false);
   assert.equal(withState.agentState.state.messageCount, 4);
+  assert.equal(withState.agentState.state.totalConversationCount, 4);
   assert.equal(withState.agentState.state.autoCompactThreshold, 200);
 
   const paged = await handlers["sessions.get"]({ id: sessionId, historyWindow: { maxTurns: 1, maxBytes: 64 * 1024 } });

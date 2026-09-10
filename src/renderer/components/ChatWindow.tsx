@@ -266,6 +266,7 @@ export function ChatWindow({
     compactError,
     compactResult,
     conversationMessageCount,
+    totalConversationCount,
     autoCompactThreshold,
     displayModel: displayModelValue,
     sessionStats,
@@ -461,6 +462,7 @@ export function ChatWindow({
       compactError={compactError}
       compactResult={compactResult}
       conversationMessageCount={conversationMessageCount}
+      totalConversationCount={totalConversationCount}
       autoCompactThreshold={autoCompactThreshold}
       toolPreset={toolPreset}
       onToolPresetChange={session || isNew ? handleToolPresetChange : undefined}

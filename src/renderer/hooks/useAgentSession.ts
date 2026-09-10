@@ -374,6 +374,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [compactError, setCompactError] = useState<string | null>(null);
   const [compactResult, setCompactResult] = useState<CompactResultInfo | null>(null);
   const [conversationMessageCount, setConversationMessageCount] = useState(0);
+  const [totalConversationCount, setTotalConversationCount] = useState(0);
   const [autoCompactThreshold, setAutoCompactThreshold] = useState(AUTO_COMPACT_MESSAGE_THRESHOLD);
   const [agentPhase, setAgentPhase] = useState<AgentPhase>(null);
   const [slashCommands, setSlashCommands] = useState<SlashCommandInfo[]>([]);
@@ -541,6 +542,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         const liveState = d.agentState?.state;
         if (liveState) {
           if (liveState.messageCount !== undefined) setConversationMessageCount(liveState.messageCount);
+          if (liveState.totalConversationCount !== undefined)
+            setTotalConversationCount(liveState.totalConversationCount);
           if (liveState.autoCompactThreshold !== undefined) setAutoCompactThreshold(liveState.autoCompactThreshold);
           if (liveState.contextUsage !== undefined) setContextUsage(liveState.contextUsage ?? null);
           if (liveState.systemPrompt !== undefined) setSystemPrompt(liveState.systemPrompt ?? null);
@@ -1014,6 +1017,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         // (wrapper destroyed) means nothing is compacting.
         setIsCompacting(state?.isCompacting ?? false);
         if (state?.messageCount !== undefined) setConversationMessageCount(state.messageCount);
+        if (state?.totalConversationCount !== undefined) setTotalConversationCount(state.totalConversationCount);
         if (state?.autoCompactThreshold !== undefined) setAutoCompactThreshold(state.autoCompactThreshold);
         setQueuedMessages(normalizeQueuedMessages(state?.queuedMessages));
         const busy = data.running && state && (state.isStreaming || state.isPromptRunning || state.isCompacting);
@@ -1856,6 +1860,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         if (agentState?.state) {
           if (agentState.state.isCompacting !== undefined) setIsCompacting(agentState.state.isCompacting);
           if (agentState.state.messageCount !== undefined) setConversationMessageCount(agentState.state.messageCount);
+          if (agentState.state.totalConversationCount !== undefined)
+            setTotalConversationCount(agentState.state.totalConversationCount);
           if (agentState.state.autoCompactThreshold !== undefined)
             setAutoCompactThreshold(agentState.state.autoCompactThreshold);
           if (agentState.state.contextUsage !== undefined) setContextUsage(agentState.state.contextUsage ?? null);
@@ -2009,6 +2015,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     compactError,
     compactResult,
     conversationMessageCount,
+    totalConversationCount,
     autoCompactThreshold,
     currentModel,
     displayModel,

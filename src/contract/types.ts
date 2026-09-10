@@ -73,6 +73,8 @@ export interface SessionRuntimeState {
   totalMessageCount?: number;
   /** Conversation (user/assistant) message count on the active branch. */
   messageCount?: number;
+  /** Conversation message count across the whole branch, including summarized history. */
+  totalConversationCount?: number;
   /** Conversation message count that triggers automatic compaction in the Host. */
   autoCompactThreshold?: number;
   /** True when `messages` was truncated to the most recent `limit` entries. */

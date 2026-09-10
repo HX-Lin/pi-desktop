@@ -26,7 +26,11 @@ import {
 import { browserCapabilityRuntime } from "./browser-capability-runtime";
 import { browserAgentRuntime } from "./browser-agent-runtime";
 import { projectExtensionDiagnostics } from "./extension-diagnostics";
-import { AUTO_COMPACT_MESSAGE_THRESHOLD, countBranchConversationMessages } from "../shared/auto-compact";
+import {
+  AUTO_COMPACT_MESSAGE_THRESHOLD,
+  countAllBranchConversationMessages,
+  countBranchConversationMessages,
+} from "../shared/auto-compact";
 
 export { countBranchConversationMessages };
 
@@ -586,6 +590,7 @@ export class AgentSessionWrapper {
           autoRetryEnabled: this.inner.autoRetryEnabled,
           model: model ? { id: model.id, provider: model.provider } : undefined,
           messageCount: countBranchConversationMessages(this.inner.sessionManager.getBranch()),
+          totalConversationCount: countAllBranchConversationMessages(this.inner.sessionManager.getBranch()),
           autoCompactThreshold: AUTO_COMPACT_MESSAGE_THRESHOLD,
           pendingMessageCount: this.inner.pendingMessageCount,
           queuedMessages: {

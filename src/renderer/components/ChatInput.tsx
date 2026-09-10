@@ -65,6 +65,8 @@ interface Props {
   compactResult?: CompactResultInfo | null;
   /** Conversation (user/assistant) message count on the active branch. */
   conversationMessageCount?: number;
+  /** Conversation message count across the whole branch, including summarized history. */
+  totalConversationCount?: number;
   /** Message count that triggers automatic compaction in the Host. */
   autoCompactThreshold?: number;
   toolPreset?: "none" | "default" | "full";
@@ -236,6 +238,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
     compactError,
     compactResult,
     conversationMessageCount = 0,
+    totalConversationCount = 0,
     autoCompactThreshold,
     toolPreset,
     onToolPresetChange,
@@ -967,6 +970,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
   const compactBarLabel = compactBarText
     .replace("{count}", String(conversationMessageCount))
     .replace("{threshold}", String(compactThreshold));
+  // When history was already folded into memory, show the running total too so
+  // it is obvious that older turns still exist and were summarized, not lost.
+  const compactHistoryNote =
+    totalConversationCount > conversationMessageCount
+      ? ` ${t("compactHistoryTotal", "({total} in history)").replace("{total}", String(totalConversationCount))}`
+      : "";
   const thinkingLabels: Record<(typeof THINKING_LEVELS)[number], string> = {
     auto: t("thinkingAuto", "Auto"),
     off: t("thinkingOff", "Off"),
@@ -1303,6 +1312,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
             </svg>
             <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {compactBarLabel}
+              {compactHistoryNote}
             </span>
             <button
               type="button"
