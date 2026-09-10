@@ -956,7 +956,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
   // on its own. The bar becomes highlighted as the chat approaches the limit.
   const compactThreshold = autoCompactThreshold ?? AUTO_COMPACT_MESSAGE_THRESHOLD;
   const compactHintAt = Math.min(AUTO_COMPACT_HINT_THRESHOLD, Math.max(1, compactThreshold - 1));
-  const showCompactHint = Boolean(onCompact) && conversationMessageCount > 0;
+  // Always show the compaction control for any chat (even empty ones) so the
+  // manual action is permanently discoverable, never gated on message count.
+  const showCompactHint = Boolean(onCompact);
   const compactIsNearLimit = conversationMessageCount >= compactHintAt;
   const compactBarText =
     conversationMessageCount >= compactThreshold
