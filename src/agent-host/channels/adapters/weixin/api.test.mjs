@@ -32,8 +32,12 @@ test("starts QR login with Tencent iLink headers and no credential", async (t) =
 
 test("getUpdates sends cursor and preserves it on an aborted long poll", async (t) => {
   const original = globalThis.fetch;
+  const originalVersion = process.env.PI_DESKTOP_VERSION;
+  delete process.env.PI_DESKTOP_VERSION;
   t.after(() => {
     globalThis.fetch = original;
+    if (originalVersion === undefined) delete process.env.PI_DESKTOP_VERSION;
+    else process.env.PI_DESKTOP_VERSION = originalVersion;
   });
   let body;
   globalThis.fetch = async (_url, init) => {

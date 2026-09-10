@@ -23,8 +23,19 @@ if (tests.length === 0) {
   process.exit(1);
 }
 
+const testEnvironment = { ...process.env };
+for (const name of [
+  "PI_DESKTOP_VERSION",
+  "PI_DESKTOP_USER_DATA",
+  "PI_DESKTOP_TOOLCHAIN_REVISION",
+  "PI_DESKTOP_TOOLCHAIN_RESOLUTION",
+]) {
+  delete testEnvironment[name];
+}
+
 const result = spawnSync(process.execPath, ["--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", "--test", ...tests], {
   cwd: root,
+  env: testEnvironment,
   stdio: "inherit",
 });
 
