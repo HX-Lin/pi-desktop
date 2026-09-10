@@ -65,7 +65,7 @@ import {
   resolveProject,
 } from "../shared/worktree";
 import { buildEntriesFromFiles, filterFileEntries } from "../shared/file-fuzzy";
-import { BUILTIN_PROVIDER_EXTENSIONS } from "./builtin-providers";
+import { BUILTIN_SESSION_EXTENSIONS } from "./builtin-providers";
 import {
   DOCX_PREVIEW_MAX_BYTES,
   IMAGE_PREVIEW_MAX_BYTES,
@@ -1167,7 +1167,7 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
       const services = await createAgentSessionServices({
         cwd,
         agentDir,
-        resourceLoaderOptions: { extensionFactories: BUILTIN_PROVIDER_EXTENSIONS },
+        resourceLoaderOptions: { extensionFactories: BUILTIN_SESSION_EXTENSIONS },
       });
       return projectModelsList(services.modelRuntime, services.settingsManager, {
         source: process.env.PI_OFFLINE === undefined ? "cache" : "offline",
@@ -1189,7 +1189,7 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
           cwd,
           agentDir,
           modelRuntimeSignal: signal,
-          resourceLoaderOptions: { extensionFactories: BUILTIN_PROVIDER_EXTENSIONS },
+          resourceLoaderOptions: { extensionFactories: BUILTIN_SESSION_EXTENSIONS },
         }),
       );
       return projectModelsList(services.modelRuntime, services.settingsManager, catalog);

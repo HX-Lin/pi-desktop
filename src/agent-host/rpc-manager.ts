@@ -14,7 +14,7 @@ import type { AgentSessionLike, ExtensionUiContextLike, ToolInfo } from "../shar
 import type { ChannelId } from "../shared/channel-types";
 import type { ExtensionUiRequest, ExtensionUiResponse, ExtensionWidgetItem } from "../shared/types";
 import { toolchainRuntime } from "./toolchain-runtime";
-import { BUILTIN_PROVIDER_EXTENSIONS } from "./builtin-providers";
+import { BUILTIN_SESSION_EXTENSIONS } from "./builtin-providers";
 import { createToolchainBashOptions } from "./toolchain-bash";
 import { createDesktopSearchToolDefinitions } from "./toolchain-search";
 import {
@@ -1438,7 +1438,7 @@ export async function startRpcSession(
     const services = await createAgentSessionServices({
       cwd,
       agentDir,
-      resourceLoaderOptions: { extensionFactories: BUILTIN_PROVIDER_EXTENSIONS },
+      resourceLoaderOptions: { extensionFactories: BUILTIN_SESSION_EXTENSIONS },
     });
     const executionContext = await toolchainRuntime.createExecutionContext({
       cwd,

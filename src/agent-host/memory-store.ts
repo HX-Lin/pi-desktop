@@ -12,10 +12,19 @@
  * When the primary exceeds its cap the oldest part sinks into the secondary
  * archive, and when the archive exceeds its cap the oldest part is dropped.
  * Both cuts prefer a section or paragraph boundary so text stays readable.
+ *
+ * Procedural knowledge does not belong in that text at all: it lives as
+ * executable scripts under `scripts/`. Those are never capped and never enter
+ * the context — only a one-line index (name + description) is injected into the
+ * system prompt, so the model knows what each script does and can run it
+ * directly. See `memory-scripts-extension.ts`.
  */
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+
+export const MEMORY_SCRIPTS_DIRNAME = "scripts";
+const MEMORY_SCRIPT_HEAD_BYTES = 4096;
 
 /** Cap for the memory that stays in the active context. */
 export const PRIMARY_MEMORY_MAX_BYTES = 3 * 1024 * 1024;
@@ -43,6 +52,112 @@ export function primaryMemoryPath(sessionId: string): string {
 
 export function secondaryMemoryPath(sessionId: string): string {
   return join(memoryDir(sessionId), "secondary.md");
+}
+
+/** Directory holding the session's executable memory scripts. */
+export function memoryScriptsDir(sessionId: string): string {
+  return join(memoryDir(sessionId), MEMORY_SCRIPTS_DIRNAME);
+}
+
+/** A script the model may run directly instead of recalling how to do the job. */
+export interface MemoryScript {
+  name: string;
+  path: string;
+  description: string;
+  bytes: number;
+}
+
+/**
+ * List the session's memory scripts.
+ *
+ * Script contents are never read into the context and never count against the
+ * memory caps, so there is no size limit on this directory.
+ */
+export function listMemoryScripts(sessionId: string): MemoryScript[] {
+  const dir = memoryScriptsDir(sessionId);
+  let names: string[];
+  try {
+    names = readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && !entry.name.startsWith("."))
+      .map((entry) => entry.name);
+  } catch {
+    return [];
+  }
+
+  return names.sort().map((name) => {
+    const path = join(dir, name);
+    let bytes = 0;
+    try {
+      bytes = statSync(path).size;
+    } catch {
+      // Raced with a delete — report it as empty rather than failing the index.
+    }
+    return { name, path, description: scriptDescription(readHead(path)), bytes };
+  });
+}
+
+/**
+ * Render the index that tells the model which scripts exist.
+ *
+ * The directory is created on the way so the model always has somewhere to drop
+ * a new script.
+ */
+export function memoryScriptIndex(sessionId: string): string {
+  try {
+    mkdirSync(memoryScriptsDir(sessionId), { recursive: true });
+  } catch {
+    // A read-only agent dir still deserves an index; listing returns [].
+  }
+  return renderMemoryScriptIndex(sessionId, listMemoryScripts(sessionId));
+}
+
+function renderMemoryScriptIndex(sessionId: string, scripts: MemoryScript[]): string {
+  const lines = [
+    "## 可执行记忆脚本",
+    "",
+    "把做过的、可复用的操作写成脚本放在这里，之后直接运行，不用重新推导，也不占用记忆上限。",
+    "",
+    `脚本目录：\`${memoryScriptsDir(sessionId)}\``,
+    "",
+    ...(scripts.length === 0
+      ? ["（暂无脚本）"]
+      : scripts.map((script) => `- \`${script.name}\` — ${script.description}`)),
+    "",
+    "运行：`bash <脚本目录>/<脚本名>`，不用先把内容读进上下文。",
+    "新增：把脚本写进该目录，并用 `# description: 用途` 注释说明，下一轮就会出现在这里。",
+  ];
+  return lines.join("\n");
+}
+
+/** Prefer an explicit `# description:` line, then the first comment line. */
+function scriptDescription(head: string): string {
+  const lines = head.split("\n", 24);
+  for (const line of lines) {
+    const match = /^#+\s*description\s*[:：]\s*(.+)$/i.exec(line.trim());
+    if (match) return match[1].trim();
+  }
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("#") || trimmed.startsWith("#!")) continue;
+    const text = trimmed.replace(/^#+\s*/, "").trim();
+    if (text) return text;
+  }
+  return "（无说明）";
+}
+
+/** Read just enough of a script to find its description. */
+function readHead(path: string): string {
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, "r");
+    const buffer = Buffer.alloc(MEMORY_SCRIPT_HEAD_BYTES);
+    const read = readSync(fd, buffer, 0, MEMORY_SCRIPT_HEAD_BYTES, 0);
+    return buffer.subarray(0, read).toString("utf8");
+  } catch {
+    return "";
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
 }
 
 /**
