@@ -313,6 +313,8 @@ export interface SessionInfo {
 export interface SessionContext {
   messages: AgentMessage[];
   entryIds: string[]; // parallel to messages — the session entry id for each message
+  /** Compaction summaries that replaced older turns, rendered as pinned memory. */
+  memory?: AgentMessage[];
   thinkingLevel: string;
   model: { provider: string; modelId: string } | null;
   /** Total message count on this branch (before pagination truncation). */

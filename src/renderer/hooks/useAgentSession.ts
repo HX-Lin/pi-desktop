@@ -374,7 +374,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [compactError, setCompactError] = useState<string | null>(null);
   const [compactResult, setCompactResult] = useState<CompactResultInfo | null>(null);
   const [conversationMessageCount, setConversationMessageCount] = useState(0);
-  const [totalConversationCount, setTotalConversationCount] = useState(0);
+  const [memoryMessages, setMemoryMessages] = useState<AgentMessage[]>([]);
   const [autoCompactThreshold, setAutoCompactThreshold] = useState(AUTO_COMPACT_MESSAGE_THRESHOLD);
   const [agentPhase, setAgentPhase] = useState<AgentPhase>(null);
   const [slashCommands, setSlashCommands] = useState<SlashCommandInfo[]>([]);
@@ -466,12 +466,16 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } satisfies SessionStatsInfo;
   })();
 
-  const commitHistory = useCallback((nextMessages: AgentMessage[], nextEntryIds: string[]) => {
-    loadedMessagesRef.current = nextMessages;
-    loadedEntryIdsRef.current = nextEntryIds;
-    setMessages(nextMessages);
-    setEntryIds(nextEntryIds);
-  }, []);
+  const commitHistory = useCallback(
+    (nextMessages: AgentMessage[], nextEntryIds: string[], nextMemory?: AgentMessage[]) => {
+      loadedMessagesRef.current = nextMessages;
+      loadedEntryIdsRef.current = nextEntryIds;
+      setMessages(nextMessages);
+      setEntryIds(nextEntryIds);
+      if (nextMemory) setMemoryMessages(nextMemory);
+    },
+    [],
+  );
 
   const updatePagingState = useCallback((revision: string, cursor?: string) => {
     historyRevisionRef.current = revision;
@@ -535,15 +539,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           deferredContentCacheRef.current.clear();
           deferredContentRequestRef.current.clear();
         }
-        commitHistory(mergedHistory.messages, mergedHistory.entryIds);
+        commitHistory(mergedHistory.messages, mergedHistory.entryIds, d.context.memory ?? []);
         updatePagingState(mergedHistory.revision!, mergedHistory.previousCursor ?? undefined);
         setCurrentModelOverride(null);
         setError(null);
         const liveState = d.agentState?.state;
         if (liveState) {
           if (liveState.messageCount !== undefined) setConversationMessageCount(liveState.messageCount);
-          if (liveState.totalConversationCount !== undefined)
-            setTotalConversationCount(liveState.totalConversationCount);
           if (liveState.autoCompactThreshold !== undefined) setAutoCompactThreshold(liveState.autoCompactThreshold);
           if (liveState.contextUsage !== undefined) setContextUsage(liveState.contextUsage ?? null);
           if (liveState.systemPrompt !== undefined) setSystemPrompt(liveState.systemPrompt ?? null);
@@ -594,7 +596,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           maxBytes: HISTORY_PAGE_MAX_BYTES,
         });
         if (gen !== contextGenRef.current) return;
-        commitHistory(d.context.messages, d.context.entryIds ?? []);
+        commitHistory(d.context.messages, d.context.entryIds ?? [], d.context.memory ?? []);
         updatePagingState(d.context.historyRevision, d.context.previousCursor);
       } catch (e) {
         if (gen !== contextGenRef.current) return;
@@ -1017,7 +1019,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         // (wrapper destroyed) means nothing is compacting.
         setIsCompacting(state?.isCompacting ?? false);
         if (state?.messageCount !== undefined) setConversationMessageCount(state.messageCount);
-        if (state?.totalConversationCount !== undefined) setTotalConversationCount(state.totalConversationCount);
         if (state?.autoCompactThreshold !== undefined) setAutoCompactThreshold(state.autoCompactThreshold);
         setQueuedMessages(normalizeQueuedMessages(state?.queuedMessages));
         const busy = data.running && state && (state.isStreaming || state.isPromptRunning || state.isCompacting);
@@ -1860,8 +1861,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         if (agentState?.state) {
           if (agentState.state.isCompacting !== undefined) setIsCompacting(agentState.state.isCompacting);
           if (agentState.state.messageCount !== undefined) setConversationMessageCount(agentState.state.messageCount);
-          if (agentState.state.totalConversationCount !== undefined)
-            setTotalConversationCount(agentState.state.totalConversationCount);
           if (agentState.state.autoCompactThreshold !== undefined)
             setAutoCompactThreshold(agentState.state.autoCompactThreshold);
           if (agentState.state.contextUsage !== undefined) setContextUsage(agentState.state.contextUsage ?? null);
@@ -2015,7 +2014,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     compactError,
     compactResult,
     conversationMessageCount,
-    totalConversationCount,
+    memoryMessages,
     autoCompactThreshold,
     currentModel,
     displayModel,

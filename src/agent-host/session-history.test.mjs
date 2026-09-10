@@ -227,10 +227,14 @@ test("compaction and branch summaries survive page boundaries with aligned entry
     pages.flatMap((page) => page.entryIds),
     full.entryIds,
   );
+  // The compaction summary is pinned memory, never part of the paginated history.
   assert.equal(
-    full.messages.some((message) => message.role === "custom" && message.customType === "compaction"),
+    pages.every((page) => page.messages.every((message) => message.customType !== "compaction")),
     true,
   );
+  assert.equal(full.memory.length, 1);
+  assert.equal(pages[0].memory.length, 1);
+  assert.equal(pages[pages.length - 1].memory.length, 1);
   assert.equal(
     full.messages.some((message) => message.role === "user" && String(message.content).includes("another branch")),
     true,

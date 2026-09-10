@@ -3,7 +3,6 @@ import test from "node:test";
 import {
   AUTO_COMPACT_HINT_THRESHOLD,
   AUTO_COMPACT_MESSAGE_THRESHOLD,
-  countAllBranchConversationMessages,
   countBranchConversationMessages,
   countConversationMessages,
 } from "./auto-compact.ts";
@@ -46,15 +45,4 @@ test("branch counting without compaction counts every conversation message", () 
     { type: "message", message: { role: "assistant" } },
   ];
   assert.equal(countBranchConversationMessages(entries), 3);
-});
-
-test("total counting keeps summarized history visible", () => {
-  const entries = [
-    { type: "message", message: { role: "user" } },
-    { type: "message", message: { role: "assistant" } },
-    { type: "compaction", summary: "older turns" },
-    { type: "message", message: { role: "user" } },
-  ];
-  assert.equal(countBranchConversationMessages(entries), 1);
-  assert.equal(countAllBranchConversationMessages(entries), 3);
 });

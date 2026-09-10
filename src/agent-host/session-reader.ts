@@ -122,6 +122,34 @@ function getMessageActivityTime(entry: SessionEntry): number | undefined {
   return Number.isNaN(parsed) ? undefined : parsed;
 }
 
+/**
+ * Keep only the part of a session path that the model still sees.
+ *
+ * pi records a compaction entry carrying `firstKeptEntryId`; every entry before
+ * it was folded into that summary. Rendering the whole path kept a long chat
+ * showing thousands of already-summarized messages, so the UI now shows the
+ * memory summary plus the kept turns: the same slice sent to the model.
+ */
+export function trimPathToCompactionContext(path: SessionEntry[]): SessionEntry[] {
+  let compactionIndex = -1;
+  for (let index = path.length - 1; index >= 0; index -= 1) {
+    if (path[index].type === "compaction") {
+      compactionIndex = index;
+      break;
+    }
+  }
+  if (compactionIndex < 0) return path;
+  const firstKeptEntryId = (path[compactionIndex] as unknown as { firstKeptEntryId?: unknown }).firstKeptEntryId;
+  const trimmed: SessionEntry[] = [path[compactionIndex]];
+  let reachedFirstKept = false;
+  for (let index = 0; index < compactionIndex; index += 1) {
+    if (path[index].id === firstKeptEntryId) reachedFirstKept = true;
+    if (reachedFirstKept) trimmed.push(path[index]);
+  }
+  trimmed.push(...path.slice(compactionIndex + 1));
+  return trimmed;
+}
+
 /** Build the Desktop SessionInfo for one already-open session without scanning all session files. */
 export async function buildSessionInfoFromManager(
   filePath: string,
@@ -138,11 +166,17 @@ export async function buildSessionInfoFromManager(
   let lastActivityTime: number | undefined;
   for (const entry of entries) {
     if (entry.type !== "message") continue;
-    messageCount += 1;
     const activityTime = getMessageActivityTime(entry);
     if (activityTime !== undefined) lastActivityTime = Math.max(lastActivityTime ?? 0, activityTime);
     const message = entry.message as unknown as { role?: unknown };
     if (!firstMessage && message.role === "user") firstMessage = getMessageTextContent(entry.message);
+  }
+
+  // The list count matches what the chat window actually renders: entries after
+  // the latest compaction only. Titles and activity still come from full history.
+  const branchEntries = manager.getBranch() as unknown as SessionEntry[];
+  for (const entry of trimPathToCompactionContext(branchEntries.length > 0 ? branchEntries : entries)) {
+    if (entry.type === "message") messageCount += 1;
   }
 
   const headerTime = Date.parse(header.timestamp);
@@ -212,16 +246,19 @@ export function buildSessionContext(entries: SessionEntry[], leafId?: string | n
     cur = cur.parentId ? byId.get(cur.parentId) : undefined;
   }
 
-  // Build UI history from the FULL branch path (root to leaf), without trimming.
-  // pi's buildSessionContext targets LLM context: it drops everything before the last
-  // compaction's firstKeptEntryId. Correct for the model, but it would hide compacted
-  // history from the UI. We keep piCtx only for thinkingLevel/model, and render every
-  // displayable entry on the path ourselves; compaction/branch_summary entries become
-  // inline summary messages so the user still sees where context was compressed.
+  // Build UI history from the compaction-aware slice of the branch. Old turns
+  // were folded into the compaction summary, which is returned separately as
+  // `memory` so the UI can pin it instead of re-rendering the whole branch.
   const messages: AgentMessage[] = [];
   const entryIds: string[] = [];
+  const memory: AgentMessage[] = [];
   let pendingChannelSource: { channel: NonNullable<UserMessage["channelSource"]>; runId?: string } | null = null;
-  for (const e of path) {
+  for (const e of trimPathToCompactionContext(path)) {
+    if (e.type === "compaction") {
+      const memoryMessage = entryToUiMessage(e);
+      if (memoryMessage) memory.push(memoryMessage);
+      continue;
+    }
     if (e.type === "custom" && e.customType === "pi-desktop-channel-source") {
       const marker = parseChannelSourceMarker(e.data);
       if (marker) pendingChannelSource = marker;
@@ -255,6 +292,7 @@ export function buildSessionContext(entries: SessionEntry[], leafId?: string | n
   return {
     messages: slicedMessages,
     entryIds: slicedEntryIds,
+    memory,
     thinkingLevel: piCtx.thinkingLevel,
     model: piCtx.model,
     totalMessageCount,

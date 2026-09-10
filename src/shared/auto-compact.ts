@@ -36,26 +36,11 @@ export function countConversationMessages(messages: readonly ConversationMessage
  * number matches what a user perceives as "messages in this chat".
  */
 export function countBranchConversationMessages(entries: readonly unknown[]): number {
-  return countConversationEntries(entries, true);
-}
-
-/**
- * Count every conversation (user/assistant) message on a branch, including
- * turns already folded into a compaction summary. Used only to show the user
- * how much history exists overall.
- */
-export function countAllBranchConversationMessages(entries: readonly unknown[]): number {
-  return countConversationEntries(entries, false);
-}
-
-function countConversationEntries(entries: readonly unknown[], afterCompaction: boolean): number {
   let start = 0;
-  if (afterCompaction) {
-    for (let index = entries.length - 1; index >= 0; index -= 1) {
-      if ((entries[index] as { type?: unknown } | null)?.type === "compaction") {
-        start = index + 1;
-        break;
-      }
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    if ((entries[index] as { type?: unknown } | null)?.type === "compaction") {
+      start = index + 1;
+      break;
     }
   }
   let count = 0;

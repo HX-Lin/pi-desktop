@@ -186,3 +186,74 @@ test("limit truncates to the most recent messages and reports totals", () => {
   assert.equal(bigEnough.truncated, false);
   assert.equal(bigEnough.messages.length, 4);
 });
+
+test("history before the latest compaction is replaced by the memory summary", () => {
+  const compactionEntry = {
+    type: "compaction",
+    id: "c1",
+    parentId: "a2",
+    timestamp,
+    summary: "memory of the old turns",
+    firstKeptEntryId: "u2",
+  };
+  const entries = [
+    { type: "message", id: "u1", parentId: null, timestamp, message: { role: "user", content: "old question" } },
+    {
+      type: "message",
+      id: "a1",
+      parentId: "u1",
+      timestamp,
+      message: { role: "assistant", content: [{ type: "text", text: "old answer" }] },
+    },
+    { type: "message", id: "u2", parentId: "a1", timestamp, message: { role: "user", content: "kept question" } },
+    {
+      type: "message",
+      id: "a2",
+      parentId: "u2",
+      timestamp,
+      message: { role: "assistant", content: [{ type: "text", text: "kept answer" }] },
+    },
+    compactionEntry,
+    { type: "message", id: "u3", parentId: "c1", timestamp, message: { role: "user", content: "new question" } },
+    {
+      type: "message",
+      id: "a3",
+      parentId: "u3",
+      timestamp,
+      message: { role: "assistant", content: [{ type: "text", text: "new answer" }] },
+    },
+  ];
+
+  const context = buildSessionContext(entries);
+  // Older turns are gone; the summary is returned separately so the UI can pin it.
+  assert.deepEqual(context.entryIds, ["u2", "a2", "u3", "a3"]);
+  assert.equal(context.totalMessageCount, 4);
+  assert.equal(context.truncated, false);
+  assert.equal(context.memory.length, 1);
+  assert.equal(context.memory[0].customType, "compaction");
+  assert.equal(context.memory[0].content, "memory of the old turns");
+
+  // Pagination never reaches behind the compaction boundary either.
+  const limited = buildSessionContext(entries, undefined, 2);
+  assert.equal(limited.totalMessageCount, 4);
+  assert.deepEqual(limited.entryIds, ["u3", "a3"]);
+  assert.equal(limited.truncated, true);
+  assert.equal(limited.memory.length, 1);
+});
+
+test("a session without compaction still renders its full history", () => {
+  const entries = [
+    { type: "message", id: "u1", parentId: null, timestamp, message: { role: "user", content: "one" } },
+    {
+      type: "message",
+      id: "a1",
+      parentId: "u1",
+      timestamp,
+      message: { role: "assistant", content: [{ type: "text", text: "two" }] },
+    },
+  ];
+  const context = buildSessionContext(entries);
+  assert.deepEqual(context.entryIds, ["u1", "a1"]);
+  assert.equal(context.totalMessageCount, 2);
+  assert.equal(context.memory.length, 0);
+});

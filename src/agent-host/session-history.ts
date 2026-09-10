@@ -16,6 +16,7 @@ import {
   entryToUiMessage,
   parseChannelSourceMarker,
   parseRunId,
+  trimPathToCompactionContext,
   withUserMessageSource,
 } from "./session-reader";
 
@@ -293,12 +294,22 @@ export function buildSessionHistoryPage(options: {
 }): PagedContextInfo {
   const { entries, historyWindow, historyRevision, cursor } = options;
   const anchorLeafId = cursor?.anchorLeafId ?? options.leafId ?? entries.at(-1)?.id ?? null;
-  const path = buildEntryPath(entries, anchorLeafId);
+  const fullPath = buildEntryPath(entries, anchorLeafId);
+  // Paginate over the same compaction-aware slice the chat renders, so pages
+  // never walk back into history that was already folded into memory.
+  const path = trimPathToCompactionContext(fullPath);
+  // Compaction summaries become the pinned memory block; the paginated history
+  // covers only the turns kept after them.
+  const memory = path
+    .filter((entry) => entry.type === "compaction")
+    .map((entry) => entryToUiMessage(entry))
+    .filter((message): message is NonNullable<typeof message> => Boolean(message));
+  const historyPath = path.filter((entry) => entry.type !== "compaction");
   if (cursor) {
     if (cursor.historyRevision !== historyRevision) throw new StaleHistoryCursorError();
-    if (path.length < cursor.anchorPathLength) throw new StaleHistoryCursorError();
-    if (!path.some((entry) => entry.id === cursor.anchorLeafId)) throw new StaleHistoryCursorError();
-    if (!path.some((entry) => entry.id === cursor.beforeEntryId)) throw new StaleHistoryCursorError();
+    if (historyPath.length < cursor.anchorPathLength) throw new StaleHistoryCursorError();
+    if (!historyPath.some((entry) => entry.id === cursor.anchorLeafId)) throw new StaleHistoryCursorError();
+    if (!historyPath.some((entry) => entry.id === cursor.beforeEntryId)) throw new StaleHistoryCursorError();
   }
 
   if (!historyWindow && !cursor) {
@@ -312,9 +323,11 @@ export function buildSessionHistoryPage(options: {
     };
   }
 
-  const settings = deriveContextSettings(path);
-  const allMessages = projectDisplayMessages(path);
-  const beforePathIndex = cursor ? path.findIndex((entry) => entry.id === cursor.beforeEntryId) : path.length;
+  const settings = deriveContextSettings(fullPath);
+  const allMessages = projectDisplayMessages(historyPath);
+  const beforePathIndex = cursor
+    ? historyPath.findIndex((entry) => entry.id === cursor.beforeEntryId)
+    : historyPath.length;
   if (beforePathIndex < 0) throw new StaleHistoryCursorError();
   const available = allMessages.filter((item) => item.pathIndex < beforePathIndex);
   const turns = groupTurns(available);
@@ -345,13 +358,14 @@ export function buildSessionHistoryPage(options: {
           historyRevision,
           anchorLeafId,
           beforeEntryId: firstSelected.entryId,
-          anchorPathLength: path.length,
+          anchorPathLength: historyPath.length,
         })
       : undefined;
 
   return {
     messages: selected.map((item) => item.message),
     entryIds: selected.map((item) => item.entryId),
+    memory,
     ...settings,
     totalMessages: allMessages.length,
     loadedMessages: selected.length,

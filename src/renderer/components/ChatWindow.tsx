@@ -266,7 +266,7 @@ export function ChatWindow({
     compactError,
     compactResult,
     conversationMessageCount,
-    totalConversationCount,
+    memoryMessages,
     autoCompactThreshold,
     displayModel: displayModelValue,
     sessionStats,
@@ -462,7 +462,6 @@ export function ChatWindow({
       compactError={compactError}
       compactResult={compactResult}
       conversationMessageCount={conversationMessageCount}
-      totalConversationCount={totalConversationCount}
       autoCompactThreshold={autoCompactThreshold}
       toolPreset={toolPreset}
       onToolPresetChange={session || isNew ? handleToolPresetChange : undefined}
@@ -790,6 +789,16 @@ export function ChatWindow({
                     };
 
                     const rendered: ReactNode[] = [];
+                    // Compaction summaries replace every older turn, so they stay
+                    // pinned above the paginated history instead of being buried
+                    // behind "load earlier messages".
+                    const memoryNodes = memoryMessages.map((message, index) =>
+                      renderMessage(-1, {
+                        messageOverride: message,
+                        keyPrefix: `memory-${index}`,
+                        attachRef: false,
+                      }),
+                    );
                     for (let idx = 0; idx < messages.length;) {
                       const msg = messages[idx];
                       if (msg.role !== "user") {
@@ -903,9 +912,10 @@ export function ChatWindow({
                     // Progressive mount: only the most recent slice is attached
                     // now; the rest is filled in over the next frames so
                     // switching to a big session paints instantly.
-                    if (visibleMessageCount >= rendered.length) return rendered;
+                    if (visibleMessageCount >= rendered.length) return [...memoryNodes, ...rendered];
                     const visible = rendered.slice(-visibleMessageCount);
                     return [
+                      ...memoryNodes,
                       ...visible,
                       <div
                         key="progressive-fill"
