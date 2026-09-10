@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
@@ -7,6 +8,11 @@ import { build } from "esbuild";
 import { AUTO_COMPACT_TURN_THRESHOLD, countBranchConversationMessages } from "../shared/auto-compact.ts";
 
 const root = path.resolve(import.meta.dirname, "..", "..");
+// Isolate the Host settings file so a developer's local threshold cannot
+// change the expected default behaviour.
+const agentDir = mkdtempSync(path.join(tmpdir(), "pi-rpc-manager-"));
+process.env.PI_CODING_AGENT_DIR = agentDir;
+process.once("exit", () => rmSync(agentDir, { recursive: true, force: true }));
 let modulePromise;
 
 async function loadRpcManager() {
@@ -168,5 +174,21 @@ test("the pi auto-compaction switch disables message-count compaction", async ()
     assert.equal(state.compactCalls, 0);
   } finally {
     wrapper.destroy();
+  }
+});
+
+test("the persisted threshold setting decides when to compact", async () => {
+  const { AgentSessionWrapper } = await loadRpcManager();
+  writeFileSync(path.join(agentDir, "pi-desktop-settings.json"), JSON.stringify({ autoCompactTurns: 5 }), "utf8");
+  const { inner, state } = createFakeSession({ branch: conversationTurns(5) });
+  const wrapper = new AgentSessionWrapper(inner);
+  try {
+    await wrapper.runExternalTurn({ runId: "run-setting", message: "hello", channel: "telegram" });
+    await waitFor(() => state.compactCalls === 1);
+    assert.equal(state.compactCalls, 1);
+    assert.match(String(state.compactInstructions[0]), /after 5 conversation turns/);
+  } finally {
+    wrapper.destroy();
+    rmSync(path.join(agentDir, "pi-desktop-settings.json"), { force: true });
   }
 });

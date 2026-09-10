@@ -15,6 +15,28 @@
  */
 export const AUTO_COMPACT_TURN_THRESHOLD = 50;
 
+/** Bounds accepted from the Settings UI for the automatic compaction threshold. */
+export const AUTO_COMPACT_TURNS_MIN = 5;
+export const AUTO_COMPACT_TURNS_MAX = 200;
+
+/** Host-side auto-compaction configuration, persisted across restarts. */
+export interface AutoCompactSettings {
+  /** Compact a chat once it reaches this many conversation turns. */
+  autoCompactTurns: number;
+}
+
+/** Coerce an arbitrary value into a usable turn threshold. */
+export function clampAutoCompactTurns(value: unknown): number {
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numeric)) return AUTO_COMPACT_TURN_THRESHOLD;
+  return Math.min(AUTO_COMPACT_TURNS_MAX, Math.max(AUTO_COMPACT_TURNS_MIN, Math.round(numeric)));
+}
+
+/** Defaults applied when no settings file exists yet. */
+export const AUTO_COMPACT_SETTINGS_DEFAULTS: AutoCompactSettings = {
+  autoCompactTurns: AUTO_COMPACT_TURN_THRESHOLD,
+};
+
 /** Highlight the manual compaction control once the chat reaches this many turns. */
 export const AUTO_COMPACT_HINT_TURNS = 30;
 

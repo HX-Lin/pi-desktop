@@ -21,6 +21,13 @@ import type { ChannelsSnapshot } from "@shared/channel-types";
 import { APP_WEBSITE_URL } from "@shared/app-links";
 import type { DesktopUpdateState } from "../../contract/desktop";
 import { APP_AUTHOR, APP_DISPLAY_NAME, APP_GITHUB_URL, APP_VERSION, PI_VERSION } from "@/lib/app-version";
+import { AUTO_COMPACT_TURNS_MAX, AUTO_COMPACT_TURNS_MIN } from "@shared/auto-compact";
+import {
+  getAutoCompactSettings,
+  loadAutoCompactSettings,
+  subscribeAutoCompactSettings,
+  updateAutoCompactTurns,
+} from "@/lib/auto-compact-settings";
 import appIconUrl from "../../../build/icon.png";
 
 export type SettingsTab =
@@ -932,8 +939,14 @@ function GeneralSettings({
 }) {
   const { t } = useI18n();
   const [backgroundMode, setBackgroundMode] = useState(true);
+  const [autoCompactTurns, setAutoCompactTurns] = useState(() => getAutoCompactSettings().autoCompactTurns);
   const languageControlId = useId();
   const backgroundModeControlId = useId();
+  const autoCompactControlId = useId();
+  useEffect(() => {
+    void loadAutoCompactSettings();
+    return subscribeAutoCompactSettings((next) => setAutoCompactTurns(next.autoCompactTurns));
+  }, []);
   const themeControlId = useId();
   const niriOpacityControlId = useId();
   const niriGlowControlId = useId();
@@ -1014,6 +1027,55 @@ function GeneralSettings({
               style={{ width: 18, height: 18, margin: 0, accentColor: "var(--accent)", cursor: "pointer" }}
             />
           </label>
+        </SettingRow>
+      </section>
+
+      <div style={{ height: 1, background: "var(--border)", maxWidth: 620, margin: "28px 0" }} />
+
+      <section style={{ maxWidth: 620 }}>
+        <h2 style={{ margin: 0, fontSize: 14, color: "var(--text)" }}>
+          {t("autoCompactSection", "Long conversations")}
+        </h2>
+        <p style={{ margin: "6px 0 16px", fontSize: 12, lineHeight: 1.6, color: "var(--text-dim)" }}>
+          {t(
+            "autoCompactDescription",
+            "A conversation is one message you send. The assistant steps and tool calls it produces are not counted.",
+          )}
+        </p>
+        <SettingRow label={t("autoCompactThreshold", "Compact to memory after")} controlId={autoCompactControlId}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <input
+              id={autoCompactControlId}
+              type="range"
+              min={AUTO_COMPACT_TURNS_MIN}
+              max={AUTO_COMPACT_TURNS_MAX}
+              step={1}
+              value={autoCompactTurns}
+              onChange={(event) => void updateAutoCompactTurns(Number(event.target.value))}
+              style={{ width: 160, accentColor: "var(--accent)", cursor: "pointer" }}
+              aria-label={t("autoCompactThreshold", "Compact to memory after")}
+            />
+            <input
+              type="number"
+              min={AUTO_COMPACT_TURNS_MIN}
+              max={AUTO_COMPACT_TURNS_MAX}
+              value={autoCompactTurns}
+              onChange={(event) => void updateAutoCompactTurns(Number(event.target.value))}
+              style={{
+                width: 62,
+                padding: "5px 8px",
+                fontSize: 12,
+                color: "var(--text)",
+                background: "var(--bg-subtle)",
+                border: "1px solid var(--border)",
+                borderRadius: 6,
+              }}
+              aria-label={t("autoCompactThreshold", "Compact to memory after")}
+            />
+            <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+              {t("autoCompactTurnsUnit", "conversations")}
+            </span>
+          </div>
         </SettingRow>
       </section>
 

@@ -11,7 +11,11 @@ import type {
   TextContent,
 } from "@/lib/types";
 import type { ModelCatalogStatus, ModelsListResult, SessionDetail, SessionRuntimeState } from "@contract/types";
-import { AUTO_COMPACT_TURN_THRESHOLD } from "@shared/auto-compact";
+import {
+  getAutoCompactSettings,
+  loadAutoCompactSettings,
+  subscribeAutoCompactSettings,
+} from "@/lib/auto-compact-settings";
 import { normalizeToolCalls } from "@/lib/normalize";
 import { sendAgentCommand } from "@/lib/agent-client";
 import {
@@ -373,10 +377,15 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [isCompacting, setIsCompacting] = useState(false);
   const [compactError, setCompactError] = useState<string | null>(null);
   const [compactResult, setCompactResult] = useState<CompactResultInfo | null>(null);
+  useEffect(() => {
+    void loadAutoCompactSettings();
+    return subscribeAutoCompactSettings((next) => setAutoCompactThreshold(next.autoCompactTurns));
+  }, []);
+
   const [conversationTurns, setConversationTurns] = useState(0);
   const [conversationMessageCount, setConversationMessageCount] = useState(0);
   const [memoryMessages, setMemoryMessages] = useState<AgentMessage[]>([]);
-  const [autoCompactThreshold, setAutoCompactThreshold] = useState(AUTO_COMPACT_TURN_THRESHOLD);
+  const [autoCompactThreshold, setAutoCompactThreshold] = useState(() => getAutoCompactSettings().autoCompactTurns);
   const [agentPhase, setAgentPhase] = useState<AgentPhase>(null);
   const [slashCommands, setSlashCommands] = useState<SlashCommandInfo[]>([]);
   const [slashCommandsLoading, setSlashCommandsLoading] = useState(false);

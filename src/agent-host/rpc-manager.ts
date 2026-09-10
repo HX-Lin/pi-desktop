@@ -26,11 +26,8 @@ import {
 import { browserCapabilityRuntime } from "./browser-capability-runtime";
 import { browserAgentRuntime } from "./browser-agent-runtime";
 import { projectExtensionDiagnostics } from "./extension-diagnostics";
-import {
-  AUTO_COMPACT_TURN_THRESHOLD,
-  countBranchConversationMessages,
-  countBranchConversationTurns,
-} from "../shared/auto-compact";
+import { countBranchConversationMessages, countBranchConversationTurns } from "../shared/auto-compact";
+import { readHostSettings } from "./host-settings";
 import { syncSessionMemory } from "./memory-store";
 import { pruneSummarizedEntries, readSessionFileEntries, writeSessionFileEntries } from "./session-prune";
 
@@ -400,6 +397,11 @@ export class AgentSessionWrapper {
     return run;
   }
 
+  /** Apply a changed compaction threshold without waiting for the next turn. */
+  recheckAutoCompaction(): void {
+    this.scheduleAutoCompactByMessageCount();
+  }
+
   private scheduleAutoCompactByMessageCount(): void {
     if (!this._alive) return;
     setImmediate(() => {
@@ -437,7 +439,8 @@ export class AgentSessionWrapper {
     if (this.inner.autoCompactionEnabled === false) return;
 
     const turns = countBranchConversationTurns(this.inner.sessionManager.getBranch());
-    if (turns < AUTO_COMPACT_TURN_THRESHOLD || turns < this.autoCompactSkipUntilCount) return;
+    const { autoCompactTurns } = readHostSettings();
+    if (turns < autoCompactTurns || turns < this.autoCompactSkipUntilCount) return;
 
     this.autoCompactInFlight = true;
     try {
@@ -648,7 +651,7 @@ export class AgentSessionWrapper {
           model: model ? { id: model.id, provider: model.provider } : undefined,
           conversationTurns: countBranchConversationTurns(this.inner.sessionManager.getBranch()),
           messageCount: countBranchConversationMessages(this.inner.sessionManager.getBranch()),
-          autoCompactThreshold: AUTO_COMPACT_TURN_THRESHOLD,
+          autoCompactThreshold: readHostSettings().autoCompactTurns,
           pendingMessageCount: this.inner.pendingMessageCount,
           queuedMessages: {
             steering: [...this.inner.getSteeringMessages()],
@@ -1328,6 +1331,16 @@ export function getRpcSession(sessionId: string): AgentSessionWrapper | undefine
 
 export function syncBrowserToolsForAllSessions(): void {
   for (const session of getRegistry().values()) session.syncBrowserToolActivation();
+}
+
+/**
+ * Re-evaluate the automatic compaction threshold for every live session.
+ *
+ * Called when the user changes the threshold in Settings so a lowered value
+ * takes effect immediately instead of on the next turn.
+ */
+export function recheckAutoCompaction(): void {
+  for (const session of getRegistry().values()) session.recheckAutoCompaction();
 }
 
 export function getRunningRpcSessionIds(): string[] {

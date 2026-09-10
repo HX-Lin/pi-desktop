@@ -39,7 +39,13 @@ import {
 } from "../contract/types";
 import type { SessionTreeNode } from "../shared/types";
 import { allowFileRoot, getAllowedFileRoots, invalidateAllowedRootsCache, isFilePathAllowed } from "./file-access";
-import { getRpcSession, getRunningRpcSessionIds, startRpcSession, subscribeRunningSessions } from "./rpc-manager";
+import {
+  getRpcSession,
+  getRunningRpcSessionIds,
+  recheckAutoCompaction,
+  startRpcSession,
+  subscribeRunningSessions,
+} from "./rpc-manager";
 import {
   buildSessionContext,
   buildSessionInfoFromManager,
@@ -70,11 +76,8 @@ import {
   getImageMime,
 } from "../shared/file-types";
 import { createFileWatchService } from "./file-watch";
-import {
-  AUTO_COMPACT_TURN_THRESHOLD,
-  countBranchConversationMessages,
-  countBranchConversationTurns,
-} from "../shared/auto-compact";
+import { countBranchConversationMessages, countBranchConversationTurns } from "../shared/auto-compact";
+import { readHostSettings, writeHostSettings } from "./host-settings";
 import { callMain } from "./parent-rpc";
 import { createAuthLoginService, resolveLoginCode } from "./auth-login";
 import { getSharedModelRuntime, modelCatalogRefreshCoordinator, reloadSharedModelRuntimeConfig } from "./model-runtime";
@@ -483,7 +486,7 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
                 ...(agentState.state ?? {}),
                 conversationTurns: agentState.state?.conversationTurns ?? fileTurnCount,
                 messageCount: agentState.state?.messageCount ?? fileMessageCount,
-                autoCompactThreshold: AUTO_COMPACT_TURN_THRESHOLD,
+                autoCompactThreshold: readHostSettings().autoCompactTurns,
               },
             }
           : undefined;
@@ -613,6 +616,16 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
         lines.push("");
       }
       return { content: lines.join("\n"), suggestedName: `session-${id}.md` };
+    },
+
+    "settings.get": async () => readHostSettings(),
+
+    "settings.update": async (params) => {
+      const { autoCompactTurns } = params as { autoCompactTurns?: number };
+      const settings = writeHostSettings({ autoCompactTurns });
+      // A lowered threshold should compact right away, not on the next turn.
+      if (autoCompactTurns !== undefined) recheckAutoCompaction();
+      return settings;
     },
 
     "sessions.delete": async (params) => {
