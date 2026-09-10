@@ -71,6 +71,10 @@ export interface SessionRuntimeState {
   model?: { provider: string; modelId: string } | null;
   /** Total message count across the whole branch (before any limit truncation). */
   totalMessageCount?: number;
+  /** Conversation (user/assistant) message count on the active branch. */
+  messageCount?: number;
+  /** Conversation message count that triggers automatic compaction in the Host. */
+  autoCompactThreshold?: number;
   /** True when `messages` was truncated to the most recent `limit` entries. */
   truncated?: boolean;
   isStreaming?: boolean;

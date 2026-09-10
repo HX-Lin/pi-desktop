@@ -28,6 +28,7 @@ import { FolderIcon, getFileIcon } from "./FileIcons";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useI18n } from "@/i18n";
 import type { ModelCatalogStatus } from "@contract/types";
+import { AUTO_COMPACT_HINT_THRESHOLD, AUTO_COMPACT_MESSAGE_THRESHOLD } from "@shared/auto-compact";
 
 export interface AttachedImage {
   data: string; // base64, no prefix
@@ -62,6 +63,10 @@ interface Props {
   isCompacting?: boolean;
   compactError?: string | null;
   compactResult?: CompactResultInfo | null;
+  /** Conversation (user/assistant) message count on the active branch. */
+  conversationMessageCount?: number;
+  /** Message count that triggers automatic compaction in the Host. */
+  autoCompactThreshold?: number;
   toolPreset?: "none" | "default" | "full";
   onToolPresetChange?: (preset: "none" | "default" | "full") => void;
   thinkingLevel?: "auto" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
@@ -230,6 +235,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
     isCompacting,
     compactError,
     compactResult,
+    conversationMessageCount = 0,
+    autoCompactThreshold,
     toolPreset,
     onToolPresetChange,
     thinkingLevel,
@@ -944,6 +951,18 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
   const compactResultText = compactResult
     ? `${compactVerb} ${formatTokenCount(compactResult.tokensBefore)} -> ${formatTokenCount(compactResult.estimatedTokensAfter)} tokens (${formatTokenCount(compactSavedTokens)} saved)`
     : null;
+  // Advertise (and offer) compaction before the Host's automatic trigger so a
+  // long chat never silently loses quality or becomes slow to reload.
+  const compactThreshold = autoCompactThreshold ?? AUTO_COMPACT_MESSAGE_THRESHOLD;
+  const compactHintAt = Math.min(AUTO_COMPACT_HINT_THRESHOLD, Math.max(1, compactThreshold - 1));
+  const showCompactHint =
+    Boolean(onCompact) &&
+    !isCompacting &&
+    conversationMessageCount >= compactHintAt &&
+    conversationMessageCount < compactThreshold;
+  const compactBarText = t("compactAutoHint", "{count} messages — compacts automatically at {threshold}")
+    .replace("{count}", String(conversationMessageCount))
+    .replace("{threshold}", String(compactThreshold));
   const thinkingLabels: Record<(typeof THINKING_LEVELS)[number], string> = {
     auto: t("thinkingAuto", "Auto"),
     off: t("thinkingOff", "Off"),
@@ -1246,6 +1265,60 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
               <polyline points="20 6 9 17 4 12" />
             </svg>
             {compactResultText}
+          </div>
+        )}
+        {showCompactHint && (
+          <div
+            style={{
+              marginBottom: 8,
+              padding: "5px 10px",
+              background: "var(--bg-panel)",
+              border: "1px solid var(--border)",
+              borderRadius: 6,
+              fontSize: 12,
+              color: "var(--text-muted)",
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+            }}
+          >
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              style={{ flexShrink: 0 }}
+            >
+              <path d="M12 3v18" />
+              <path d="M5 8h14" />
+              <path d="M5 16h14" />
+            </svg>
+            <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {compactBarText}
+            </span>
+            <button
+              type="button"
+              onClick={() => onCompact?.()}
+              disabled={isStreaming}
+              style={{
+                flexShrink: 0,
+                padding: "3px 10px",
+                background: "var(--accent)",
+                border: "none",
+                borderRadius: 5,
+                color: "#fff",
+                cursor: isStreaming ? "not-allowed" : "pointer",
+                fontSize: 12,
+                fontWeight: 600,
+                opacity: isStreaming ? 0.5 : 1,
+              }}
+            >
+              {t("compactNow", "Compact to memory")}
+            </button>
           </div>
         )}
         {/* Image previews */}

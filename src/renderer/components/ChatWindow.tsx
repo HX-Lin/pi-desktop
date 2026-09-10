@@ -265,6 +265,8 @@ export function ChatWindow({
     isCompacting,
     compactError,
     compactResult,
+    conversationMessageCount,
+    autoCompactThreshold,
     displayModel: displayModelValue,
     sessionStats,
     slashCommands,
@@ -458,6 +460,8 @@ export function ChatWindow({
       isCompacting={isCompacting}
       compactError={compactError}
       compactResult={compactResult}
+      conversationMessageCount={conversationMessageCount}
+      autoCompactThreshold={autoCompactThreshold}
       toolPreset={toolPreset}
       onToolPresetChange={session || isNew ? handleToolPresetChange : undefined}
       thinkingLevel={thinkingLevel}

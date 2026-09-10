@@ -11,6 +11,7 @@ import type {
   TextContent,
 } from "@/lib/types";
 import type { ModelCatalogStatus, ModelsListResult, SessionDetail, SessionRuntimeState } from "@contract/types";
+import { AUTO_COMPACT_MESSAGE_THRESHOLD } from "@shared/auto-compact";
 import { normalizeToolCalls } from "@/lib/normalize";
 import { sendAgentCommand } from "@/lib/agent-client";
 import {
@@ -372,6 +373,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [isCompacting, setIsCompacting] = useState(false);
   const [compactError, setCompactError] = useState<string | null>(null);
   const [compactResult, setCompactResult] = useState<CompactResultInfo | null>(null);
+  const [conversationMessageCount, setConversationMessageCount] = useState(0);
+  const [autoCompactThreshold, setAutoCompactThreshold] = useState(AUTO_COMPACT_MESSAGE_THRESHOLD);
   const [agentPhase, setAgentPhase] = useState<AgentPhase>(null);
   const [slashCommands, setSlashCommands] = useState<SlashCommandInfo[]>([]);
   const [slashCommandsLoading, setSlashCommandsLoading] = useState(false);
@@ -1008,6 +1011,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         // would otherwise leave the "Stop compaction" UI stuck. No state
         // (wrapper destroyed) means nothing is compacting.
         setIsCompacting(state?.isCompacting ?? false);
+        if (state?.messageCount !== undefined) setConversationMessageCount(state.messageCount);
+        if (state?.autoCompactThreshold !== undefined) setAutoCompactThreshold(state.autoCompactThreshold);
         setQueuedMessages(normalizeQueuedMessages(state?.queuedMessages));
         const busy = data.running && state && (state.isStreaming || state.isPromptRunning || state.isCompacting);
         if (busy || !agentRunningRef.current) return;
@@ -1848,6 +1853,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         }
         if (agentState?.state) {
           if (agentState.state.isCompacting !== undefined) setIsCompacting(agentState.state.isCompacting);
+          if (agentState.state.messageCount !== undefined) setConversationMessageCount(agentState.state.messageCount);
+          if (agentState.state.autoCompactThreshold !== undefined)
+            setAutoCompactThreshold(agentState.state.autoCompactThreshold);
           if (agentState.state.contextUsage !== undefined) setContextUsage(agentState.state.contextUsage ?? null);
           if (agentState.state.systemPrompt !== undefined) setSystemPrompt(agentState.state.systemPrompt ?? null);
           if (agentState.state.thinkingLevel !== undefined)
@@ -1998,6 +2006,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     isCompacting,
     compactError,
     compactResult,
+    conversationMessageCount,
+    autoCompactThreshold,
     currentModel,
     displayModel,
     sessionStats,

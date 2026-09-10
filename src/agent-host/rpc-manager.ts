@@ -26,6 +26,7 @@ import {
 import { browserCapabilityRuntime } from "./browser-capability-runtime";
 import { browserAgentRuntime } from "./browser-agent-runtime";
 import { projectExtensionDiagnostics } from "./extension-diagnostics";
+import { AUTO_COMPACT_MESSAGE_THRESHOLD } from "../shared/auto-compact";
 
 // ============================================================================
 // Types
@@ -35,6 +36,25 @@ export interface AgentEvent {
   type: string;
   [key: string]: unknown;
 }
+
+/**
+ * Count conversation messages (user/assistant) on the active session branch.
+ * Tool results, compaction, and bookkeeping entries are excluded so the count
+ * matches what a user perceives as "messages in this chat".
+ */
+export function countBranchConversationMessages(entries: readonly unknown[]): number {
+  let count = 0;
+  for (const entry of entries) {
+    const record = entry as { type?: unknown; message?: { role?: unknown } } | null;
+    if (!record || record.type !== "message") continue;
+    const role = record.message?.role;
+    if (role === "user" || role === "assistant") count += 1;
+  }
+  return count;
+}
+
+/** Grow the message count by this much before retrying a compaction that could not reduce context. */
+const AUTO_COMPACT_RETRY_MESSAGE_GROWTH = 50;
 
 type EventListener = (event: AgentEvent) => void;
 
@@ -158,6 +178,8 @@ export class AgentSessionWrapper {
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private onDestroyCallback: (() => void) | null = null;
   private _alive = true;
+  private autoCompactInFlight = false;
+  private autoCompactSkipUntilCount = 0;
 
   constructor(inner: AgentSessionLike) {
     this.inner = inner;
@@ -365,6 +387,10 @@ export class AgentSessionWrapper {
           this.promptRunning = false;
           this.queuedTurnCount = Math.max(0, this.queuedTurnCount - 1);
           notifyRunningChange();
+          // After every completed turn, consider compacting by message count.
+          // Scheduled outside this promise so the compaction turn can enqueue
+          // behind turnTail instead of waiting on itself.
+          this.scheduleAutoCompactByMessageCount();
         }
       });
     this.turnTail = run.then(
@@ -372,6 +398,48 @@ export class AgentSessionWrapper {
       () => undefined,
     );
     return run;
+  }
+
+  private scheduleAutoCompactByMessageCount(): void {
+    if (!this._alive) return;
+    setImmediate(() => {
+      void this.maybeAutoCompactByMessageCount();
+    });
+  }
+
+  /**
+   * Compact automatically once the chat reaches the message threshold.
+   *
+   * Only runs when the session is fully idle, so a queued or streaming turn
+   * never gets compacted mid-flight; that turn schedules its own check when it
+   * finishes. A compaction that cannot reduce context (session too small after
+   * token-based cut points) raises the floor so the next attempt waits for
+   * meaningful growth instead of retrying every turn.
+   */
+  private async maybeAutoCompactByMessageCount(): Promise<void> {
+    if (!this._alive || this.autoCompactInFlight) return;
+    if (this.queuedTurnCount > 0 || this.promptRunning || this.inner.isStreaming || this.inner.isCompacting) return;
+    // Honour the user's pi auto-compaction switch as the master toggle.
+    if (this.inner.autoCompactionEnabled === false) return;
+
+    const count = countBranchConversationMessages(this.inner.sessionManager.getBranch());
+    if (count < AUTO_COMPACT_MESSAGE_THRESHOLD || count < this.autoCompactSkipUntilCount) return;
+
+    this.autoCompactInFlight = true;
+    try {
+      await this.enqueueTurn(() => this.inner.compact(`Automatically compacted after ${count} conversation messages.`));
+      const after = countBranchConversationMessages(this.inner.sessionManager.getBranch());
+      // Nothing was removed — wait for meaningful growth before retrying.
+      this.autoCompactSkipUntilCount = after >= count ? count + AUTO_COMPACT_RETRY_MESSAGE_GROWTH : 0;
+    } catch (error) {
+      this.autoCompactSkipUntilCount = count + AUTO_COMPACT_RETRY_MESSAGE_GROWTH;
+      console.error(
+        "[pi-desktop] automatic message-count compaction failed:",
+        error instanceof Error ? error.message : error,
+      );
+    } finally {
+      this.autoCompactInFlight = false;
+    }
   }
 
   async runExternalTurn(params: {
@@ -531,7 +599,8 @@ export class AgentSessionWrapper {
           autoCompactionEnabled: this.inner.autoCompactionEnabled,
           autoRetryEnabled: this.inner.autoRetryEnabled,
           model: model ? { id: model.id, provider: model.provider } : undefined,
-          messageCount: 0,
+          messageCount: countBranchConversationMessages(this.inner.sessionManager.getBranch()),
+          autoCompactThreshold: AUTO_COMPACT_MESSAGE_THRESHOLD,
           pendingMessageCount: this.inner.pendingMessageCount,
           queuedMessages: {
             steering: [...this.inner.getSteeringMessages()],
