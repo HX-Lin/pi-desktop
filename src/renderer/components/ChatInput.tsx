@@ -951,16 +951,18 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
   const compactResultText = compactResult
     ? `${compactVerb} ${formatTokenCount(compactResult.tokensBefore)} -> ${formatTokenCount(compactResult.estimatedTokensAfter)} tokens (${formatTokenCount(compactSavedTokens)} saved)`
     : null;
-  // Advertise (and offer) compaction before the Host's automatic trigger so a
-  // long chat never silently loses quality or becomes slow to reload.
+  // Keep the compaction control visible for any active chat so the manual
+  // action is always discoverable; the text states when the Host will compact
+  // on its own. The bar becomes highlighted as the chat approaches the limit.
   const compactThreshold = autoCompactThreshold ?? AUTO_COMPACT_MESSAGE_THRESHOLD;
   const compactHintAt = Math.min(AUTO_COMPACT_HINT_THRESHOLD, Math.max(1, compactThreshold - 1));
-  const showCompactHint =
-    Boolean(onCompact) &&
-    !isCompacting &&
-    conversationMessageCount >= compactHintAt &&
-    conversationMessageCount < compactThreshold;
-  const compactBarText = t("compactAutoHint", "{count} messages — compacts automatically at {threshold}")
+  const showCompactHint = Boolean(onCompact) && conversationMessageCount > 0;
+  const compactIsNearLimit = conversationMessageCount >= compactHintAt;
+  const compactBarText =
+    conversationMessageCount >= compactThreshold
+      ? t("compactAutoRunning", "{count} messages — auto-compacting context to memory")
+      : t("compactAutoHint", "{count} messages — compacts automatically at {threshold}");
+  const compactBarLabel = compactBarText
     .replace("{count}", String(conversationMessageCount))
     .replace("{threshold}", String(compactThreshold));
   const thinkingLabels: Record<(typeof THINKING_LEVELS)[number], string> = {
@@ -1272,8 +1274,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
             style={{
               marginBottom: 8,
               padding: "5px 10px",
-              background: "var(--bg-panel)",
-              border: "1px solid var(--border)",
+              background: compactIsNearLimit ? "rgba(234,179,8,0.08)" : "var(--bg-panel)",
+              border: `1px solid ${compactIsNearLimit ? "rgba(234,179,8,0.28)" : "var(--border)"}`,
               borderRadius: 6,
               fontSize: 12,
               color: "var(--text-muted)",
@@ -1298,26 +1300,26 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
               <path d="M5 16h14" />
             </svg>
             <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {compactBarText}
+              {compactBarLabel}
             </span>
             <button
               type="button"
-              onClick={() => onCompact?.()}
-              disabled={isStreaming}
+              onClick={() => (isCompacting ? onAbortCompaction?.() : onCompact?.())}
+              disabled={isStreaming && !isCompacting}
               style={{
                 flexShrink: 0,
                 padding: "3px 10px",
-                background: "var(--accent)",
-                border: "none",
+                background: isCompacting ? "rgba(239,68,68,0.1)" : "var(--accent)",
+                border: isCompacting ? "1px solid rgba(239,68,68,0.3)" : "none",
                 borderRadius: 5,
-                color: "#fff",
-                cursor: isStreaming ? "not-allowed" : "pointer",
+                color: isCompacting ? "#ef4444" : "#fff",
+                cursor: isStreaming && !isCompacting ? "not-allowed" : "pointer",
                 fontSize: 12,
                 fontWeight: 600,
-                opacity: isStreaming ? 0.5 : 1,
+                opacity: isStreaming && !isCompacting ? 0.5 : 1,
               }}
             >
-              {t("compactNow", "Compact to memory")}
+              {isCompacting ? t("compacting", "Compacting…") : t("compactNow", "Compact to memory")}
             </button>
           </div>
         )}

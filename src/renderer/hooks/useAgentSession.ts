@@ -540,6 +540,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         setError(null);
         const liveState = d.agentState?.state;
         if (liveState) {
+          if (liveState.messageCount !== undefined) setConversationMessageCount(liveState.messageCount);
+          if (liveState.autoCompactThreshold !== undefined) setAutoCompactThreshold(liveState.autoCompactThreshold);
           if (liveState.contextUsage !== undefined) setContextUsage(liveState.contextUsage ?? null);
           if (liveState.systemPrompt !== undefined) setSystemPrompt(liveState.systemPrompt ?? null);
           if (liveState.thinkingLevel !== undefined)
