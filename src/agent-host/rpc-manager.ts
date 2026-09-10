@@ -27,6 +27,8 @@ import { browserCapabilityRuntime } from "./browser-capability-runtime";
 import { browserAgentRuntime } from "./browser-agent-runtime";
 import { projectExtensionDiagnostics } from "./extension-diagnostics";
 import { AUTO_COMPACT_MESSAGE_THRESHOLD, countBranchConversationMessages } from "../shared/auto-compact";
+import { syncSessionMemory } from "./memory-store";
+import { pruneSummarizedEntries, readSessionFileEntries, writeSessionFileEntries } from "./session-prune";
 
 export { countBranchConversationMessages };
 
@@ -166,6 +168,7 @@ export class AgentSessionWrapper {
   private _alive = true;
   private autoCompactInFlight = false;
   private autoCompactSkipUntilCount = 0;
+  private prunePending = false;
 
   constructor(inner: AgentSessionLike) {
     this.inner = inner;
@@ -200,6 +203,13 @@ export class AgentSessionWrapper {
   start(): void {
     this.unsubscribe = this.inner.subscribe((event: AgentEvent) => {
       this.resetIdleTimer();
+      // pi also compacts on its own token budget. Whenever a summary is created,
+      // fold it into the memory files and drop the summarized turns so the
+      // session file cannot grow forever behind a small context.
+      if (event.type === "compaction_end" && !(event as { aborted?: boolean }).aborted) {
+        this.prunePending = true;
+        this.schedulePruneSummarizedHistory();
+      }
       const displayEvent = this.withExternalChannelSource(event);
       this.emit(displayEvent);
       try {
@@ -389,8 +399,22 @@ export class AgentSessionWrapper {
   private scheduleAutoCompactByMessageCount(): void {
     if (!this._alive) return;
     setImmediate(() => {
+      this.flushPendingPrune();
       void this.maybeAutoCompactByMessageCount();
     });
+  }
+
+  private schedulePruneSummarizedHistory(): void {
+    if (!this._alive) return;
+    setImmediate(() => this.flushPendingPrune());
+  }
+
+  /** Prune once the session is idle; retry on the next turn boundary otherwise. */
+  private flushPendingPrune(): void {
+    if (!this.prunePending) return;
+    if (this.queuedTurnCount > 0 || this.promptRunning || this.inner.isStreaming || this.inner.isCompacting) return;
+    this.prunePending = false;
+    this.pruneSummarizedHistory();
   }
 
   /**
@@ -413,7 +437,10 @@ export class AgentSessionWrapper {
 
     this.autoCompactInFlight = true;
     try {
-      await this.enqueueTurn(() => this.inner.compact(`Automatically compacted after ${count} conversation messages.`));
+      await this.enqueueTurn(async () => {
+        await this.inner.compact(`Automatically compacted after ${count} conversation messages.`);
+        this.pruneSummarizedHistory();
+      });
       const after = countBranchConversationMessages(this.inner.sessionManager.getBranch());
       // Nothing was removed — wait for meaningful growth before retrying.
       this.autoCompactSkipUntilCount = after >= count ? count + AUTO_COMPACT_RETRY_MESSAGE_GROWTH : 0;
@@ -425,6 +452,35 @@ export class AgentSessionWrapper {
       );
     } finally {
       this.autoCompactInFlight = false;
+    }
+  }
+
+  /**
+   * Rewrite the session file so it only holds what the model still sees.
+   *
+   * pi keeps summarized turns on disk forever, so without this the file (and
+   * the message counts in the UI) grows without bound even though the context
+   * stays small. The memory entry is mirrored into the per-session memory files
+   * first, so a capped memory survives the rewrite.
+   */
+  private pruneSummarizedHistory(): void {
+    const manager = this.inner.sessionManager;
+    const filePath = typeof manager?.getSessionFile === "function" ? manager.getSessionFile() : undefined;
+    if (!filePath || typeof manager.setSessionFile !== "function") return;
+    try {
+      const { header, entries } = readSessionFileEntries(filePath);
+      if (!header) return;
+      const sessionId = typeof manager.getSessionId === "function" ? manager.getSessionId() : String(header.id ?? "");
+      if (!sessionId) return;
+      const { entries: kept, removed } = pruneSummarizedEntries(
+        entries,
+        (memory) => syncSessionMemory(sessionId, memory).primary,
+      );
+      if (removed <= 0) return;
+      writeSessionFileEntries(filePath, header, kept);
+      manager.setSessionFile(filePath);
+    } catch (error) {
+      console.error("[pi-desktop] session pruning failed:", error instanceof Error ? error.message : error);
     }
   }
 
@@ -503,6 +559,7 @@ export class AgentSessionWrapper {
     await this.enqueueTurn(async () => {
       if (params.command === "compact") {
         await this.inner.compact(params.customInstructions);
+        this.pruneSummarizedHistory();
         return;
       }
       await this.reloadSessionResources();
@@ -667,7 +724,11 @@ export class AgentSessionWrapper {
 
       case "compact": {
         const result = await this.withFinalRunningNotification(() =>
-          this.enqueueTurn(() => this.inner.compact(command.customInstructions as string | undefined)),
+          this.enqueueTurn(async () => {
+            const compacted = await this.inner.compact(command.customInstructions as string | undefined);
+            this.pruneSummarizedHistory();
+            return compacted;
+          }),
         );
         return result;
       }

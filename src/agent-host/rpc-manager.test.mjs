@@ -112,7 +112,10 @@ test("a turn past the message threshold triggers automatic compaction", async ()
     await wrapper.runExternalTurn({ runId: "run-auto", message: "hello", channel: "telegram" });
     await waitFor(() => state.compactCalls === 1);
     assert.equal(state.compactCalls, 1);
-    assert.match(String(state.compactInstructions[0]), /Automatically compacted after 200 conversation messages/);
+    assert.match(
+      String(state.compactInstructions[0]),
+      new RegExp(`Automatically compacted after ${AUTO_COMPACT_MESSAGE_THRESHOLD} conversation messages`),
+    );
     assert.ok(countConversationMessages(state.branch) < AUTO_COMPACT_MESSAGE_THRESHOLD);
   } finally {
     wrapper.destroy();

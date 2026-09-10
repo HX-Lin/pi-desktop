@@ -7,10 +7,10 @@
  * reaches {@link AUTO_COMPACT_MESSAGE_THRESHOLD} conversation messages, and
  * surfaces a manual control near the composer before that point.
  */
-export const AUTO_COMPACT_MESSAGE_THRESHOLD = 200;
+export const AUTO_COMPACT_MESSAGE_THRESHOLD = 50;
 
 /** Show the manual compaction prompt once the chat reaches this many messages. */
-export const AUTO_COMPACT_HINT_THRESHOLD = 120;
+export const AUTO_COMPACT_HINT_THRESHOLD = 30;
 
 /** Minimal shape needed to count conversation messages in a UI list. */
 interface ConversationMessageLike {
