@@ -461,6 +461,13 @@ test("sessions.get returns the contract shape without rescanning known session p
   assert.deepEqual(detail.context.entryIds, ["user-one", "assistant-one", "user-two", "assistant-two"]);
   assert.equal(detail.context.messages.length, 4);
 
+  // A closed session still reports a real conversation count derived from the
+  // session file, so the UI never shows "0 messages" for existing chats.
+  const withState = await handlers["sessions.get"]({ id: sessionId, includeState: true });
+  assert.equal(withState.agentState.running, false);
+  assert.equal(withState.agentState.state.messageCount, 4);
+  assert.equal(withState.agentState.state.autoCompactThreshold, 200);
+
   const paged = await handlers["sessions.get"]({ id: sessionId, historyWindow: { maxTurns: 1, maxBytes: 64 * 1024 } });
   assert.deepEqual(paged.context.entryIds, ["user-two", "assistant-two"]);
   assert.equal(paged.context.truncatedBefore, true);

@@ -25,3 +25,30 @@ export function countConversationMessages(messages: readonly ConversationMessage
   }
   return count;
 }
+
+/**
+ * Count conversation (user/assistant) messages on a session branch.
+ *
+ * Counting starts after the latest compaction entry: once history has been
+ * summarized into memory those old messages are no longer part of the active
+ * context, so they must not keep the session above the auto-compaction
+ * threshold forever. Tool results and bookkeeping entries are excluded so the
+ * number matches what a user perceives as "messages in this chat".
+ */
+export function countBranchConversationMessages(entries: readonly unknown[]): number {
+  let start = 0;
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    if ((entries[index] as { type?: unknown } | null)?.type === "compaction") {
+      start = index + 1;
+      break;
+    }
+  }
+  let count = 0;
+  for (let index = start; index < entries.length; index += 1) {
+    const record = entries[index] as { type?: unknown; message?: { role?: unknown } } | null;
+    if (!record || record.type !== "message") continue;
+    const role = record.message?.role;
+    if (role === "user" || role === "assistant") count += 1;
+  }
+  return count;
+}

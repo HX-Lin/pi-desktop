@@ -70,6 +70,7 @@ import {
   getImageMime,
 } from "../shared/file-types";
 import { createFileWatchService } from "./file-watch";
+import { AUTO_COMPACT_MESSAGE_THRESHOLD, countBranchConversationMessages } from "../shared/auto-compact";
 import { callMain } from "./parent-rpc";
 import { createAuthLoginService, resolveLoginCode } from "./auth-login";
 import { getSharedModelRuntime, modelCatalogRefreshCoordinator, reloadSharedModelRuntimeConfig } from "./model-runtime";
@@ -464,6 +465,21 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
           buildSessionInfoFromManager(filePath, sm, entries),
           agentStatePromise,
         ]);
+        // The live Host session is only queried while a session is open; for
+        // every other session derive the conversation count from the session
+        // file so the UI always has a real number to show.
+        const branchEntries = sm.getBranch();
+        const fileMessageCount = countBranchConversationMessages(branchEntries.length > 0 ? branchEntries : entries);
+        const resolvedAgentState: SessionDetail["agentState"] = agentState
+          ? {
+              running: agentState.running,
+              state: {
+                ...(agentState.state ?? {}),
+                messageCount: agentState.state?.messageCount ?? fileMessageCount,
+                autoCompactThreshold: AUTO_COMPACT_MESSAGE_THRESHOLD,
+              },
+            }
+          : undefined;
         const infoMs = performance.now() - infoStartedAt;
 
         const detail: SessionDetail = {
@@ -473,7 +489,7 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
           leafId,
           tree,
           context,
-          ...(agentState !== undefined ? { agentState } : {}),
+          ...(resolvedAgentState !== undefined ? { agentState: resolvedAgentState } : {}),
         };
         const responseBytes = sessionPerformanceBytesEnabled()
           ? Buffer.byteLength(JSON.stringify(detail), "utf8")

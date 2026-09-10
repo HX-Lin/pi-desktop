@@ -26,7 +26,12 @@ import {
 import { browserCapabilityRuntime } from "./browser-capability-runtime";
 import { browserAgentRuntime } from "./browser-agent-runtime";
 import { projectExtensionDiagnostics } from "./extension-diagnostics";
-import { AUTO_COMPACT_MESSAGE_THRESHOLD } from "../shared/auto-compact";
+import { AUTO_COMPACT_MESSAGE_THRESHOLD, countBranchConversationMessages } from "../shared/auto-compact";
+
+export { countBranchConversationMessages };
+
+/** Grow the message count by this much before retrying a compaction that could not reduce context. */
+const AUTO_COMPACT_RETRY_MESSAGE_GROWTH = 50;
 
 // ============================================================================
 // Types
@@ -36,25 +41,6 @@ export interface AgentEvent {
   type: string;
   [key: string]: unknown;
 }
-
-/**
- * Count conversation messages (user/assistant) on the active session branch.
- * Tool results, compaction, and bookkeeping entries are excluded so the count
- * matches what a user perceives as "messages in this chat".
- */
-export function countBranchConversationMessages(entries: readonly unknown[]): number {
-  let count = 0;
-  for (const entry of entries) {
-    const record = entry as { type?: unknown; message?: { role?: unknown } } | null;
-    if (!record || record.type !== "message") continue;
-    const role = record.message?.role;
-    if (role === "user" || role === "assistant") count += 1;
-  }
-  return count;
-}
-
-/** Grow the message count by this much before retrying a compaction that could not reduce context. */
-const AUTO_COMPACT_RETRY_MESSAGE_GROWTH = 50;
 
 type EventListener = (event: AgentEvent) => void;
 

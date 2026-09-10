@@ -92,9 +92,10 @@ test("countBranchConversationMessages counts only user/assistant branch entries"
   assert.equal(
     countBranchConversationMessages([
       message("user"),
+      { type: "compaction", summary: "old" },
+      message("user"),
       message("assistant"),
       { type: "message", message: { role: "toolResult" } },
-      { type: "compaction", summary: "old" },
       { type: "model_change", provider: "p", modelId: "m" },
       "not-an-entry",
       null,
