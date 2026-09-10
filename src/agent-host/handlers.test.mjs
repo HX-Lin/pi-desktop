@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { CredentialSynchronizationError } from "@earendil-works/pi-coding-agent";
 import { build } from "esbuild";
-import { AUTO_COMPACT_MESSAGE_THRESHOLD } from "../shared/auto-compact.ts";
+import { AUTO_COMPACT_TURN_THRESHOLD } from "../shared/auto-compact.ts";
 
 const root = path.resolve(import.meta.dirname, "..", "..");
 const isolatedAgentDirectory = mkdtempSync(path.join(tmpdir(), "pi-handler-agent-"));
@@ -467,7 +467,8 @@ test("sessions.get returns the contract shape without rescanning known session p
   const withState = await handlers["sessions.get"]({ id: sessionId, includeState: true });
   assert.equal(withState.agentState.running, false);
   assert.equal(withState.agentState.state.messageCount, 4);
-  assert.equal(withState.agentState.state.autoCompactThreshold, AUTO_COMPACT_MESSAGE_THRESHOLD);
+  assert.equal(withState.agentState.state.autoCompactThreshold, AUTO_COMPACT_TURN_THRESHOLD);
+  assert.equal(withState.agentState.state.conversationTurns, 2);
 
   const paged = await handlers["sessions.get"]({ id: sessionId, historyWindow: { maxTurns: 1, maxBytes: 64 * 1024 } });
   assert.deepEqual(paged.context.entryIds, ["user-two", "assistant-two"]);

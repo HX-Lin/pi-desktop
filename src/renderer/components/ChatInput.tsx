@@ -28,7 +28,7 @@ import { FolderIcon, getFileIcon } from "./FileIcons";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useI18n } from "@/i18n";
 import type { ModelCatalogStatus } from "@contract/types";
-import { AUTO_COMPACT_HINT_THRESHOLD, AUTO_COMPACT_MESSAGE_THRESHOLD } from "@shared/auto-compact";
+import { AUTO_COMPACT_HINT_TURNS, AUTO_COMPACT_TURN_THRESHOLD } from "@shared/auto-compact";
 
 export interface AttachedImage {
   data: string; // base64, no prefix
@@ -63,6 +63,8 @@ interface Props {
   isCompacting?: boolean;
   compactError?: string | null;
   compactResult?: CompactResultInfo | null;
+  /** Conversation turns (user messages) on the active branch. */
+  conversationTurns?: number;
   /** Conversation (user/assistant) message count on the active branch. */
   conversationMessageCount?: number;
   /** Message count that triggers automatic compaction in the Host. */
@@ -235,6 +237,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
     isCompacting,
     compactError,
     compactResult,
+    conversationTurns = 0,
     conversationMessageCount = 0,
     autoCompactThreshold,
     toolPreset,
@@ -954,19 +957,24 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
   // Keep the compaction control visible for any active chat so the manual
   // action is always discoverable; the text states when the Host will compact
   // on its own. The bar becomes highlighted as the chat approaches the limit.
-  const compactThreshold = autoCompactThreshold ?? AUTO_COMPACT_MESSAGE_THRESHOLD;
-  const compactHintAt = Math.min(AUTO_COMPACT_HINT_THRESHOLD, Math.max(1, compactThreshold - 1));
+  const compactThreshold = autoCompactThreshold ?? AUTO_COMPACT_TURN_THRESHOLD;
+  const compactHintAt = Math.min(AUTO_COMPACT_HINT_TURNS, Math.max(1, compactThreshold - 1));
   // Always show the compaction control for any chat (even empty ones) so the
   // manual action is permanently discoverable, never gated on message count.
   const showCompactHint = Boolean(onCompact);
-  const compactIsNearLimit = conversationMessageCount >= compactHintAt;
+  const compactIsNearLimit = conversationTurns >= compactHintAt;
   const compactBarText =
-    conversationMessageCount >= compactThreshold
-      ? t("compactAutoRunning", "{count} messages — auto-compacting context to memory")
-      : t("compactAutoHint", "{count} messages — compacts automatically at {threshold}");
+    conversationTurns >= compactThreshold
+      ? t("compactAutoRunning", "{count} conversations — auto-compacting context to memory")
+      : t("compactAutoHint", "{count} conversations — compacts automatically at {threshold}");
   const compactBarLabel = compactBarText
-    .replace("{count}", String(conversationMessageCount))
-    .replace("{threshold}", String(compactThreshold));
+    .replace("{count}", String(conversationTurns))
+    .replace("{threshold}", String(compactThreshold))
+    .replace("{messages}", String(conversationMessageCount));
+  const compactMessageDetail =
+    conversationMessageCount > 0
+      ? t("compactMessageDetail", "{messages} messages").replace("{messages}", String(conversationMessageCount))
+      : "";
   const thinkingLabels: Record<(typeof THINKING_LEVELS)[number], string> = {
     auto: t("thinkingAuto", "Auto"),
     off: t("thinkingOff", "Off"),
@@ -1303,6 +1311,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
             </svg>
             <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {compactBarLabel}
+              {compactMessageDetail ? ` · ${compactMessageDetail}` : ""}
             </span>
             <button
               type="button"

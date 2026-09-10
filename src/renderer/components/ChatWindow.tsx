@@ -265,6 +265,7 @@ export function ChatWindow({
     isCompacting,
     compactError,
     compactResult,
+    conversationTurns,
     conversationMessageCount,
     memoryMessages,
     autoCompactThreshold,
@@ -461,6 +462,7 @@ export function ChatWindow({
       isCompacting={isCompacting}
       compactError={compactError}
       compactResult={compactResult}
+      conversationTurns={conversationTurns}
       conversationMessageCount={conversationMessageCount}
       autoCompactThreshold={autoCompactThreshold}
       toolPreset={toolPreset}

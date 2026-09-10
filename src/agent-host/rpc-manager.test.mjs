@@ -4,7 +4,7 @@ import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
-import { AUTO_COMPACT_MESSAGE_THRESHOLD, countConversationMessages } from "../shared/auto-compact.ts";
+import { AUTO_COMPACT_TURN_THRESHOLD, countBranchConversationMessages } from "../shared/auto-compact.ts";
 
 const root = path.resolve(import.meta.dirname, "..", "..");
 let modulePromise;
@@ -34,8 +34,12 @@ function message(role) {
   return { type: "message", message: { role } };
 }
 
-function conversationPair(count) {
-  return Array.from({ length: count }, (_, index) => message(index % 2 === 0 ? "user" : "assistant"));
+/**
+ * Build `count` conversation turns. Each turn is one user message followed by
+ * two assistant steps, mirroring how a single turn balloons into many messages.
+ */
+function conversationTurns(count) {
+  return Array.from({ length: count }, () => [message("user"), message("assistant"), message("assistant")]).flat();
 }
 
 function createFakeSession({ branch, autoCompactionEnabled = true }) {
@@ -62,7 +66,7 @@ function createFakeSession({ branch, autoCompactionEnabled = true }) {
     compact: async (instructions) => {
       state.compactCalls += 1;
       state.compactInstructions.push(instructions ?? null);
-      state.branch = state.branch.slice(-10);
+      state.branch = state.branch.slice(-6);
       return { summary: "compacted" };
     },
   };
@@ -104,9 +108,9 @@ test("countBranchConversationMessages counts only user/assistant branch entries"
   );
 });
 
-test("a turn past the message threshold triggers automatic compaction", async () => {
+test("a chat past the turn threshold triggers automatic compaction", async () => {
   const { AgentSessionWrapper } = await loadRpcManager();
-  const { inner, state } = createFakeSession({ branch: conversationPair(AUTO_COMPACT_MESSAGE_THRESHOLD) });
+  const { inner, state } = createFakeSession({ branch: conversationTurns(AUTO_COMPACT_TURN_THRESHOLD) });
   const wrapper = new AgentSessionWrapper(inner);
   try {
     await wrapper.runExternalTurn({ runId: "run-auto", message: "hello", channel: "telegram" });
@@ -114,9 +118,25 @@ test("a turn past the message threshold triggers automatic compaction", async ()
     assert.equal(state.compactCalls, 1);
     assert.match(
       String(state.compactInstructions[0]),
-      new RegExp(`Automatically compacted after ${AUTO_COMPACT_MESSAGE_THRESHOLD} conversation messages`),
+      new RegExp(`Automatically compacted after ${AUTO_COMPACT_TURN_THRESHOLD} conversation turns`),
     );
-    assert.ok(countConversationMessages(state.branch) < AUTO_COMPACT_MESSAGE_THRESHOLD);
+    assert.ok(countBranchConversationMessages(state.branch) < AUTO_COMPACT_TURN_THRESHOLD * 3);
+  } finally {
+    wrapper.destroy();
+  }
+});
+
+test("many assistant steps in a few turns never auto-compact", async () => {
+  const { AgentSessionWrapper } = await loadRpcManager();
+  // One turn that produced 140 assistant steps used to look like 140 messages.
+  const branch = [message("user"), ...Array.from({ length: 140 }, () => message("assistant"))];
+  const { inner, state } = createFakeSession({ branch });
+  const wrapper = new AgentSessionWrapper(inner);
+  try {
+    await wrapper.runExternalTurn({ runId: "run-steps", message: "hello", channel: "telegram" });
+    await settle();
+    assert.ok(countBranchConversationMessages(state.branch) > AUTO_COMPACT_TURN_THRESHOLD * 2);
+    assert.equal(state.compactCalls, 0);
   } finally {
     wrapper.destroy();
   }
@@ -124,7 +144,7 @@ test("a turn past the message threshold triggers automatic compaction", async ()
 
 test("a short session never auto-compacts", async () => {
   const { AgentSessionWrapper } = await loadRpcManager();
-  const { inner, state } = createFakeSession({ branch: conversationPair(AUTO_COMPACT_MESSAGE_THRESHOLD - 2) });
+  const { inner, state } = createFakeSession({ branch: conversationTurns(AUTO_COMPACT_TURN_THRESHOLD - 2) });
   const wrapper = new AgentSessionWrapper(inner);
   try {
     await wrapper.runExternalTurn({ runId: "run-short", message: "hello", channel: "telegram" });
@@ -138,7 +158,7 @@ test("a short session never auto-compacts", async () => {
 test("the pi auto-compaction switch disables message-count compaction", async () => {
   const { AgentSessionWrapper } = await loadRpcManager();
   const { inner, state } = createFakeSession({
-    branch: conversationPair(AUTO_COMPACT_MESSAGE_THRESHOLD),
+    branch: conversationTurns(AUTO_COMPACT_TURN_THRESHOLD),
     autoCompactionEnabled: false,
   });
   const wrapper = new AgentSessionWrapper(inner);

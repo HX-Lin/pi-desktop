@@ -70,7 +70,11 @@ import {
   getImageMime,
 } from "../shared/file-types";
 import { createFileWatchService } from "./file-watch";
-import { AUTO_COMPACT_MESSAGE_THRESHOLD, countBranchConversationMessages } from "../shared/auto-compact";
+import {
+  AUTO_COMPACT_TURN_THRESHOLD,
+  countBranchConversationMessages,
+  countBranchConversationTurns,
+} from "../shared/auto-compact";
 import { callMain } from "./parent-rpc";
 import { createAuthLoginService, resolveLoginCode } from "./auth-login";
 import { getSharedModelRuntime, modelCatalogRefreshCoordinator, reloadSharedModelRuntimeConfig } from "./model-runtime";
@@ -469,14 +473,17 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
         // every other session derive the conversation count from the session
         // file so the UI always has a real number to show.
         const branchEntries = sm.getBranch();
-        const fileMessageCount = countBranchConversationMessages(branchEntries.length > 0 ? branchEntries : entries);
+        const countedEntries = branchEntries.length > 0 ? branchEntries : entries;
+        const fileMessageCount = countBranchConversationMessages(countedEntries);
+        const fileTurnCount = countBranchConversationTurns(countedEntries);
         const resolvedAgentState: SessionDetail["agentState"] = agentState
           ? {
               running: agentState.running,
               state: {
                 ...(agentState.state ?? {}),
+                conversationTurns: agentState.state?.conversationTurns ?? fileTurnCount,
                 messageCount: agentState.state?.messageCount ?? fileMessageCount,
-                autoCompactThreshold: AUTO_COMPACT_MESSAGE_THRESHOLD,
+                autoCompactThreshold: AUTO_COMPACT_TURN_THRESHOLD,
               },
             }
           : undefined;
