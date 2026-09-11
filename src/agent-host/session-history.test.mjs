@@ -196,6 +196,7 @@ test("compaction and branch summaries survive page boundaries with aligned entry
       summary: "compressed history",
       firstKeptEntryId: "entry-0",
       tokensBefore: 100,
+      details: { piDesktopMemoryCompaction: true },
     },
     {
       type: "branch_summary",
@@ -238,6 +239,30 @@ test("compaction and branch summaries survive page boundaries with aligned entry
   assert.equal(
     full.messages.some((message) => message.role === "user" && String(message.content).includes("another branch")),
     true,
+  );
+});
+
+test("a plain context compaction neither pins memory nor hides messages", () => {
+  const entries = chain([
+    user("old"),
+    assistant([{ type: "text", text: "old answer" }]),
+    {
+      type: "compaction",
+      summary: "pi freed the window",
+      firstKeptEntryId: "entry-1",
+      tokensBefore: 100,
+    },
+    user("new"),
+    assistant([{ type: "text", text: "new answer" }]),
+  ]);
+
+  const page = buildSessionHistoryPage({ entries, historyRevision: "context-only" });
+
+  assert.equal(page.memory.length, 0);
+  // Every conversation message is still shown: nothing was digested.
+  assert.deepEqual(
+    page.messages.map((message) => message.role),
+    ["user", "assistant", "user", "assistant"],
   );
 });
 

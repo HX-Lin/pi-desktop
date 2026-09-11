@@ -66,6 +66,8 @@ test("pruning keeps the memory plus the turns it still covers", () => {
   assert.equal(kept[2].parentId, "u2");
   assert.equal(kept[3].parentId, "a2");
   assert.equal(kept[0].summary, "## Goal\nMemory of the summarized turns");
+  // Marked as a memory compaction so pi's own context compactions stay distinct.
+  assert.equal(kept[0].details.piDesktopMemoryCompaction, true);
 });
 
 test("pruning rewrites the memory through the supplied transform", () => {

@@ -965,15 +965,18 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
   const compactIsNearLimit = conversationTurns >= compactHintAt;
   const compactBarText =
     conversationTurns >= compactThreshold
-      ? t("compactAutoRunning", "{count} conversations — auto-compacting context to memory")
-      : t("compactAutoHint", "{count} conversations — compacts automatically at {threshold}");
+      ? t("compactAutoRunning", "{count} conversations pending — compacting to memory now")
+      : t("compactAutoHint", "{count} conversations pending — compacts to memory at {threshold}");
   const compactBarLabel = compactBarText
     .replace("{count}", String(conversationTurns))
     .replace("{threshold}", String(compactThreshold))
     .replace("{messages}", String(conversationMessageCount));
   const compactMessageDetail =
     conversationMessageCount > 0
-      ? t("compactMessageDetail", "{messages} messages").replace("{messages}", String(conversationMessageCount))
+      ? t("compactMessageDetail", "context holds {messages} messages").replace(
+          "{messages}",
+          String(conversationMessageCount),
+        )
       : "";
   const thinkingLabels: Record<(typeof THINKING_LEVELS)[number], string> = {
     auto: t("thinkingAuto", "Auto"),

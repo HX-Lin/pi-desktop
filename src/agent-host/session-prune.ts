@@ -10,8 +10,13 @@
  *
  * The rewrite is atomic (temp file + rename) and re-chains `parentId` so the
  * result is still a valid session tree rooted at the memory entry.
+ *
+ * Only memory compactions get here. The retained memory entry is marked as such,
+ * which is what tells a memory compaction apart from the context compactions pi
+ * runs on its own (see `MEMORY_COMPACTION_DETAIL_KEY`).
  */
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { MEMORY_COMPACTION_DETAIL_KEY } from "../shared/auto-compact";
 
 export interface PrunableEntry {
   id?: string;
@@ -53,10 +58,17 @@ export function pruneSummarizedEntries(
 
   let memory = typeof compaction.summary === "string" ? compaction.summary : "";
   if (updateMemory && memory) memory = updateMemory(memory);
-  const keptMemory = memory === compaction.summary ? compaction : { ...compaction, summary: memory };
+  const details =
+    typeof compaction.details === "object" && compaction.details !== null
+      ? (compaction.details as Record<string, unknown>)
+      : {};
+  const keptMemory: PrunableEntry = {
+    ...compaction,
+    summary: memory,
+    details: { ...details, [MEMORY_COMPACTION_DETAIL_KEY]: true },
+  };
 
   const kept = [keptMemory, ...entries.slice(tailStart, compactionIndex), ...entries.slice(compactionIndex + 1)];
-  if (kept.length === entries.length && keptMemory === compaction) return { entries, removed: 0 };
 
   // Re-chain so the memory entry becomes the root of the retained path.
   const rechained: PrunableEntry[] = [];

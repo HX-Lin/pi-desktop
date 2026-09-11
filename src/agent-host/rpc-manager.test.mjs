@@ -122,10 +122,11 @@ test("a chat past the turn threshold triggers automatic compaction", async () =>
     await wrapper.runExternalTurn({ runId: "run-auto", message: "hello", channel: "telegram" });
     await waitFor(() => state.compactCalls === 1);
     assert.equal(state.compactCalls, 1);
-    assert.match(
-      String(state.compactInstructions[0]),
-      new RegExp(`Automatically compacted after ${AUTO_COMPACT_TURN_THRESHOLD} conversation turns`),
-    );
+    // Desktop compactions are memory compactions, so the distillation prompt is
+    // attached and the trigger reason is spelled out on top of it.
+    const instructions = String(state.compactInstructions[0]);
+    assert.match(instructions, /压缩为记忆/);
+    assert.match(instructions, new RegExp(`已达到 ${AUTO_COMPACT_TURN_THRESHOLD} 条对话`));
     assert.ok(countBranchConversationMessages(state.branch) < AUTO_COMPACT_TURN_THRESHOLD * 3);
   } finally {
     wrapper.destroy();
@@ -186,7 +187,7 @@ test("the persisted threshold setting decides when to compact", async () => {
     await wrapper.runExternalTurn({ runId: "run-setting", message: "hello", channel: "telegram" });
     await waitFor(() => state.compactCalls === 1);
     assert.equal(state.compactCalls, 1);
-    assert.match(String(state.compactInstructions[0]), /after 5 conversation turns/);
+    assert.match(String(state.compactInstructions[0]), /已达到 5 条对话/);
   } finally {
     wrapper.destroy();
     rmSync(path.join(agentDir, "pi-desktop-settings.json"), { force: true });

@@ -45,7 +45,7 @@ test("a turn counts the user message, not the assistant steps it produced", () =
   assert.equal(countBranchConversationMessages(entries), 6);
 });
 
-test("branch counting starts after the latest compaction entry", () => {
+test("context message counting starts after the latest compaction of any kind", () => {
   const entries = [
     { type: "message", message: { role: "user" } },
     { type: "message", message: { role: "assistant" } },
@@ -55,7 +55,26 @@ test("branch counting starts after the latest compaction entry", () => {
     { type: "message", message: { role: "assistant" } },
   ];
   assert.equal(countBranchConversationMessages(entries), 2);
-  assert.equal(countBranchConversationTurns(entries), 1);
+});
+
+test("turn counting only resets on a memory compaction", () => {
+  const contextCompaction = [
+    { type: "message", message: { role: "user" } },
+    { type: "compaction", summary: "pi freed room for the model" },
+    { type: "message", message: { role: "user" } },
+    { type: "message", message: { role: "assistant" } },
+  ];
+  // A plain context compaction must not postpone the memory threshold.
+  assert.equal(countBranchConversationTurns(contextCompaction), 2);
+  assert.equal(countBranchConversationMessages(contextCompaction), 2);
+
+  const memoryCompaction = [
+    ...contextCompaction,
+    { type: "compaction", summary: "digested", details: { piDesktopMemoryCompaction: true } },
+    { type: "message", message: { role: "user" } },
+  ];
+  assert.equal(countBranchConversationTurns(memoryCompaction), 1);
+  assert.equal(countBranchConversationMessages(memoryCompaction), 1);
 });
 
 test("branch counting without compaction counts every conversation message", () => {

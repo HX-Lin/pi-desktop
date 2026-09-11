@@ -6,6 +6,7 @@ import {
 import { existsSync } from "node:fs";
 import type { AgentMessage, SessionEntry, SessionInfo, SessionContext, UserMessage } from "../shared/types";
 import type { SessionEntry as PiSessionEntry, SessionInfo as PiSessionInfo } from "@earendil-works/pi-coding-agent";
+import { isMemoryCompactionEntry } from "../shared/auto-compact";
 import { normalizeToolCalls } from "../shared/normalize";
 import { resolveProject, type ProjectInfo } from "../shared/worktree";
 import { sessionIndex } from "./session-index";
@@ -123,17 +124,23 @@ function getMessageActivityTime(entry: SessionEntry): number | undefined {
 }
 
 /**
- * Keep only the part of a session path that the model still sees.
+ * Keep only the part of a session path from the last memory compaction onwards.
  *
- * pi records a compaction entry carrying `firstKeptEntryId`; every entry before
- * it was folded into that summary. Rendering the whole path kept a long chat
- * showing thousands of already-summarized messages, so the UI now shows the
- * memory summary plus the kept turns: the same slice sent to the model.
+ * A memory compaction is the checkpoint that digests finished work: everything
+ * before its `firstKeptEntryId` is folded into the memory summary and dropped
+ * from the session file, so the UI shows the memory followed by the turns that
+ * were kept.
+ *
+ * Context compactions pi runs on its own (token threshold, overflow recovery)
+ * are ignored here on purpose. They only free room in the model context; they
+ * are not a memory checkpoint, so they must neither hide the history nor make
+ * the chat look compacted. A session that was never compacted to memory returns
+ * its whole path.
  */
-export function trimPathToCompactionContext(path: SessionEntry[]): SessionEntry[] {
+export function trimPathToMemoryCheckpoint(path: SessionEntry[]): SessionEntry[] {
   let compactionIndex = -1;
   for (let index = path.length - 1; index >= 0; index -= 1) {
-    if (path[index].type === "compaction") {
+    if (isMemoryCompactionEntry(path[index])) {
       compactionIndex = index;
       break;
     }
@@ -175,7 +182,7 @@ export async function buildSessionInfoFromManager(
   // The list count matches what the chat window actually renders: entries after
   // the latest compaction only. Titles and activity still come from full history.
   const branchEntries = manager.getBranch() as unknown as SessionEntry[];
-  for (const entry of trimPathToCompactionContext(branchEntries.length > 0 ? branchEntries : entries)) {
+  for (const entry of trimPathToMemoryCheckpoint(branchEntries.length > 0 ? branchEntries : entries)) {
     if (entry.type === "message") messageCount += 1;
   }
 
@@ -246,15 +253,18 @@ export function buildSessionContext(entries: SessionEntry[], leafId?: string | n
     cur = cur.parentId ? byId.get(cur.parentId) : undefined;
   }
 
-  // Build UI history from the compaction-aware slice of the branch. Old turns
-  // were folded into the compaction summary, which is returned separately as
-  // `memory` so the UI can pin it instead of re-rendering the whole branch.
+  // Build UI history from the memory-checkpoint slice of the branch. Digested
+  // turns are replaced by the memory summary, which is returned separately as
+  // `memory` so the UI can pin it instead of re-rendering them. Compactions pi
+  // ran for its own token budget are skipped entirely: they are not memory and
+  // the turns they summarized are still displayed.
   const messages: AgentMessage[] = [];
   const entryIds: string[] = [];
   const memory: AgentMessage[] = [];
   let pendingChannelSource: { channel: NonNullable<UserMessage["channelSource"]>; runId?: string } | null = null;
-  for (const e of trimPathToCompactionContext(path)) {
+  for (const e of trimPathToMemoryCheckpoint(path)) {
     if (e.type === "compaction") {
+      if (!isMemoryCompactionEntry(e)) continue;
       const memoryMessage = entryToUiMessage(e);
       if (memoryMessage) memory.push(memoryMessage);
       continue;

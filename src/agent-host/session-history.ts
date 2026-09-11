@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { statSync } from "node:fs";
 import type { HistoryWindow, PagedContextInfo } from "../contract/types";
+import { isMemoryCompactionEntry } from "../shared/auto-compact";
 import type {
   AgentMessage,
   DeferredContentRef,
@@ -16,7 +17,7 @@ import {
   entryToUiMessage,
   parseChannelSourceMarker,
   parseRunId,
-  trimPathToCompactionContext,
+  trimPathToMemoryCheckpoint,
   withUserMessageSource,
 } from "./session-reader";
 
@@ -297,11 +298,12 @@ export function buildSessionHistoryPage(options: {
   const fullPath = buildEntryPath(entries, anchorLeafId);
   // Paginate over the same compaction-aware slice the chat renders, so pages
   // never walk back into history that was already folded into memory.
-  const path = trimPathToCompactionContext(fullPath);
-  // Compaction summaries become the pinned memory block; the paginated history
-  // covers only the turns kept after them.
+  const path = trimPathToMemoryCheckpoint(fullPath);
+  // Memory summaries become the pinned memory block; the paginated history
+  // covers only the turns kept after them. Compactions pi ran for its own token
+  // budget are skipped: they only free room in the model context.
   const memory = path
-    .filter((entry) => entry.type === "compaction")
+    .filter((entry) => isMemoryCompactionEntry(entry))
     .map((entry) => entryToUiMessage(entry))
     .filter((message): message is NonNullable<typeof message> => Boolean(message));
   const historyPath = path.filter((entry) => entry.type !== "compaction");

@@ -20,10 +20,23 @@
  * directly. See `memory-scripts-extension.ts`.
  */
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { closeSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  readdirSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 
 export const MEMORY_SCRIPTS_DIRNAME = "scripts";
+/** Script names must be plain file names: no separators, no leading dot. */
+export const MEMORY_SCRIPT_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const MEMORY_SCRIPT_HEAD_BYTES = 4096;
 
 /** Cap for the memory that stays in the active context. */
@@ -94,6 +107,28 @@ export function listMemoryScripts(sessionId: string): MemoryScript[] {
     }
     return { name, path, description: scriptDescription(readHead(path)), bytes };
   });
+}
+
+/**
+ * Write a memory script, replacing any previous version atomically.
+ *
+ * Returns `null` for names that are not plain file names, so a model (or a
+ * prompt injection) can never escape the session's script directory.
+ */
+export function writeMemoryScript(sessionId: string, name: string, content: string): MemoryScript | null {
+  if (!MEMORY_SCRIPT_NAME_PATTERN.test(name)) return null;
+  const dir = memoryScriptsDir(sessionId);
+  const path = join(dir, name);
+  const tempPath = `${path}.tmp-${process.pid}`;
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(tempPath, content, "utf8");
+    chmodSync(tempPath, 0o755);
+    renameSync(tempPath, path);
+  } catch {
+    return null;
+  }
+  return { name, path, description: scriptDescription(content), bytes: Buffer.byteLength(content, "utf8") };
 }
 
 /**

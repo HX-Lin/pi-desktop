@@ -40,6 +40,27 @@ export const AUTO_COMPACT_SETTINGS_DEFAULTS: AutoCompactSettings = {
 /** Highlight the manual compaction control once the chat reaches this many turns. */
 export const AUTO_COMPACT_HINT_TURNS = 30;
 
+/**
+ * Detail key that marks a compaction entry as a memory compaction.
+ *
+ * pi compacts the context on its own whenever the token budget runs out, and
+ * that is a different operation: it only frees room for the model and must not
+ * delete session history or count towards the memory threshold. Marking the
+ * entries produced by "压缩为记忆" is what keeps the two apart.
+ */
+export const MEMORY_COMPACTION_DETAIL_KEY = "piDesktopMemoryCompaction";
+
+/** True when a session entry is a compaction produced by "压缩为记忆". */
+export function isMemoryCompactionEntry(entry: unknown): boolean {
+  if ((entry as { type?: unknown } | null)?.type !== "compaction") return false;
+  const details = (entry as { details?: unknown }).details;
+  return (
+    typeof details === "object" &&
+    details !== null &&
+    (details as Record<string, unknown>)[MEMORY_COMPACTION_DETAIL_KEY] === true
+  );
+}
+
 /** Minimal shape needed to count conversation messages in a UI list. */
 interface ConversationMessageLike {
   role?: unknown;
@@ -67,10 +88,24 @@ function activeContextStartIndex(entries: readonly unknown[]): number {
   return 0;
 }
 
-/** Count the conversation turns (user messages) on a session branch. */
+/**
+ * Index of the first entry since the latest memory compaction.
+ *
+ * Context compactions pi runs on its own are deliberately *not* a boundary: they
+ * leave session history in place, so the work since the last memory compaction is
+ * still waiting to be distilled and must keep counting towards its threshold.
+ */
+function memoryCompactionStartIndex(entries: readonly unknown[]): number {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    if (isMemoryCompactionEntry(entries[index])) return index + 1;
+  }
+  return 0;
+}
+
+/** Count the conversation turns (user messages) since the last memory compaction. */
 export function countBranchConversationTurns(entries: readonly unknown[]): number {
   let count = 0;
-  for (let index = activeContextStartIndex(entries); index < entries.length; index += 1) {
+  for (let index = memoryCompactionStartIndex(entries); index < entries.length; index += 1) {
     const record = entries[index] as { type?: unknown; message?: { role?: unknown } } | null;
     if (!record || record.type !== "message") continue;
     if (record.message?.role === "user") count += 1;

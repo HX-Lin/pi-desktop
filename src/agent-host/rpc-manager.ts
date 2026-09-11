@@ -28,6 +28,7 @@ import { browserAgentRuntime } from "./browser-agent-runtime";
 import { projectExtensionDiagnostics } from "./extension-diagnostics";
 import { countBranchConversationMessages, countBranchConversationTurns } from "../shared/auto-compact";
 import { readHostSettings } from "./host-settings";
+import { MEMORY_DISTILLATION_PROMPT, sedimentMemoryScripts } from "./memory-prompt";
 import { syncSessionMemory } from "./memory-store";
 import { pruneSummarizedEntries, readSessionFileEntries, writeSessionFileEntries } from "./session-prune";
 
@@ -35,6 +36,18 @@ export { countBranchConversationMessages };
 
 /** Grow the message count by this much before retrying a compaction that could not reduce context. */
 const AUTO_COMPACT_RETRY_TURN_GROWTH = 10;
+
+/**
+ * "压缩为记忆" instructions.
+ *
+ * Every desktop-triggered compaction is a memory compaction, so the distillation
+ * prompt is always attached; caller-supplied focus is kept as an extra
+ * requirement instead of replacing it.
+ */
+function compactToMemoryInstructions(extraFocus?: string): string {
+  const focus = extraFocus?.trim();
+  return focus ? `${MEMORY_DISTILLATION_PROMPT}\n\n用户额外要求：${focus}` : MEMORY_DISTILLATION_PROMPT;
+}
 
 // ============================================================================
 // Types
@@ -169,7 +182,6 @@ export class AgentSessionWrapper {
   private _alive = true;
   private autoCompactInFlight = false;
   private autoCompactSkipUntilCount = 0;
-  private prunePending = false;
 
   constructor(inner: AgentSessionLike) {
     this.inner = inner;
@@ -204,13 +216,10 @@ export class AgentSessionWrapper {
   start(): void {
     this.unsubscribe = this.inner.subscribe((event: AgentEvent) => {
       this.resetIdleTimer();
-      // pi also compacts on its own token budget. Whenever a summary is created,
-      // fold it into the memory files and drop the summarized turns so the
-      // session file cannot grow forever behind a small context.
-      if (event.type === "compaction_end" && !(event as { aborted?: boolean }).aborted) {
-        this.prunePending = true;
-        this.schedulePruneSummarizedHistory();
-      }
+      // pi's own token-budget compaction is left alone here: it only frees room
+      // in the model context and must not touch session history. Deleting the
+      // summarized turns belongs to a memory compaction, which happens on its own
+      // threshold or when the user asks for it.
       const displayEvent = this.withExternalChannelSource(event);
       this.emit(displayEvent);
       try {
@@ -404,23 +413,7 @@ export class AgentSessionWrapper {
 
   private scheduleAutoCompactByMessageCount(): void {
     if (!this._alive) return;
-    setImmediate(() => {
-      this.flushPendingPrune();
-      void this.maybeAutoCompactByMessageCount();
-    });
-  }
-
-  private schedulePruneSummarizedHistory(): void {
-    if (!this._alive) return;
-    setImmediate(() => this.flushPendingPrune());
-  }
-
-  /** Prune once the session is idle; retry on the next turn boundary otherwise. */
-  private flushPendingPrune(): void {
-    if (!this.prunePending) return;
-    if (this.queuedTurnCount > 0 || this.promptRunning || this.inner.isStreaming || this.inner.isCompacting) return;
-    this.prunePending = false;
-    this.pruneSummarizedHistory();
+    setImmediate(() => void this.maybeAutoCompactByMessageCount());
   }
 
   /**
@@ -438,6 +431,8 @@ export class AgentSessionWrapper {
     // Honour the user's pi auto-compaction switch as the master toggle.
     if (this.inner.autoCompactionEnabled === false) return;
 
+    // Counted since the last memory compaction, so a context compaction pi ran on
+    // its own never postpones this threshold.
     const turns = countBranchConversationTurns(this.inner.sessionManager.getBranch());
     const { autoCompactTurns } = readHostSettings();
     if (turns < autoCompactTurns || turns < this.autoCompactSkipUntilCount) return;
@@ -445,7 +440,7 @@ export class AgentSessionWrapper {
     this.autoCompactInFlight = true;
     try {
       await this.enqueueTurn(async () => {
-        await this.inner.compact(`Automatically compacted after ${turns} conversation turns.`);
+        await this.inner.compact(compactToMemoryInstructions(`已达到 ${turns} 条对话，自动触发。`));
         this.pruneSummarizedHistory();
       });
       const after = countBranchConversationTurns(this.inner.sessionManager.getBranch());
@@ -479,11 +474,13 @@ export class AgentSessionWrapper {
       if (!header) return;
       const sessionId = typeof manager.getSessionId === "function" ? manager.getSessionId() : String(header.id ?? "");
       if (!sessionId) return;
-      const { entries: kept, removed } = pruneSummarizedEntries(
+      const { entries: kept } = pruneSummarizedEntries(
         entries,
-        (memory) => syncSessionMemory(sessionId, memory).primary,
+        (memory) => syncSessionMemory(sessionId, sedimentMemoryScripts(sessionId, memory)).primary,
       );
-      if (removed <= 0) return;
+      // Also rewritten when nothing was dropped: the retained memory entry gets
+      // marked as a memory compaction even then.
+      if (kept === entries) return;
       writeSessionFileEntries(filePath, header, kept);
       manager.setSessionFile(filePath);
     } catch (error) {
@@ -565,7 +562,7 @@ export class AgentSessionWrapper {
   async runExternalCommand(params: { command: ExternalSessionCommand; customInstructions?: string }): Promise<void> {
     await this.enqueueTurn(async () => {
       if (params.command === "compact") {
-        await this.inner.compact(params.customInstructions);
+        await this.inner.compact(compactToMemoryInstructions(params.customInstructions));
         this.pruneSummarizedHistory();
         return;
       }
@@ -733,7 +730,9 @@ export class AgentSessionWrapper {
       case "compact": {
         const result = await this.withFinalRunningNotification(() =>
           this.enqueueTurn(async () => {
-            const compacted = await this.inner.compact(command.customInstructions as string | undefined);
+            const compacted = await this.inner.compact(
+              compactToMemoryInstructions(command.customInstructions as string | undefined),
+            );
             this.pruneSummarizedHistory();
             return compacted;
           }),

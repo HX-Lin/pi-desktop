@@ -187,7 +187,7 @@ test("limit truncates to the most recent messages and reports totals", () => {
   assert.equal(bigEnough.messages.length, 4);
 });
 
-test("history before the latest compaction is replaced by the memory summary", () => {
+test("history before the latest memory compaction is replaced by the memory summary", () => {
   const compactionEntry = {
     type: "compaction",
     id: "c1",
@@ -195,6 +195,8 @@ test("history before the latest compaction is replaced by the memory summary", (
     timestamp,
     summary: "memory of the old turns",
     firstKeptEntryId: "u2",
+    // A memory compaction is marked; pi's own context compactions are not.
+    details: { piDesktopMemoryCompaction: true },
   };
   const entries = [
     { type: "message", id: "u1", parentId: null, timestamp, message: { role: "user", content: "old question" } },
@@ -239,6 +241,38 @@ test("history before the latest compaction is replaced by the memory summary", (
   assert.deepEqual(limited.entryIds, ["u3", "a3"]);
   assert.equal(limited.truncated, true);
   assert.equal(limited.memory.length, 1);
+});
+
+test("a context compaction pi ran on its own is invisible in the chat", () => {
+  // Same session, but the compaction was NOT a memory compaction: it only freed
+  // room in the model context, so no message may disappear and no memory card may
+  // appear before the memory threshold is reached.
+  const entries = [
+    { type: "message", id: "u1", parentId: null, timestamp, message: { role: "user", content: "old question" } },
+    {
+      type: "message",
+      id: "a1",
+      parentId: "u1",
+      timestamp,
+      message: { role: "assistant", content: [{ type: "text", text: "old answer" }] },
+    },
+    { type: "message", id: "u2", parentId: "a1", timestamp, message: { role: "user", content: "kept question" } },
+    {
+      type: "compaction",
+      id: "c1",
+      parentId: "u2",
+      timestamp,
+      summary: "pi freed the window",
+      firstKeptEntryId: "u2",
+    },
+    { type: "message", id: "u3", parentId: "c1", timestamp, message: { role: "user", content: "new question" } },
+  ];
+
+  const context = buildSessionContext(entries);
+
+  assert.deepEqual(context.entryIds, ["u1", "a1", "u2", "u3"]);
+  assert.equal(context.totalMessageCount, 4);
+  assert.equal(context.memory.length, 0);
 });
 
 test("a session without compaction still renders its full history", () => {

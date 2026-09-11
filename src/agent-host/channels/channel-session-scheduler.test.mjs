@@ -115,7 +115,12 @@ test("UI prompts and messaging-channel turns share one serial session scheduler"
   releaseUi();
   const result = await external;
   await compact;
-  assert.deepEqual(order, ["ui-start", "ui-end", "im-start", "im-end", "compact:keep decisions"]);
+  // Compaction carries the memory distillation prompt, so only the caller's extra
+  // focus is asserted here.
+  assert.equal(order.length, 5);
+  assert.deepEqual(order.slice(0, 4), ["ui-start", "ui-end", "im-start", "im-end"]);
+  assert.match(order[4], /^compact:这是一次「压缩为记忆」/);
+  assert.match(order[4], /用户额外要求：keep decisions$/);
   assert.equal(result.finalText, "reply:im");
   assert.deepEqual(externalPromptOptions.images, [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }]);
   assert.equal(externalPromptOptions.expandPromptTemplates, false);
