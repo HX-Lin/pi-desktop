@@ -48,8 +48,8 @@ function conversationTurns(count) {
   return Array.from({ length: count }, () => [message("user"), message("assistant"), message("assistant")]).flat();
 }
 
-function createFakeSession({ branch, autoCompactionEnabled = true }) {
-  const state = { branch: [...branch], compactCalls: 0, compactInstructions: [] };
+function createFakeSession({ branch, autoCompactionEnabled = true, contextUsage = null }) {
+  const state = { branch: [...branch], compactCalls: 0, compactInstructions: [], contextUsage };
   const sessionManager = {
     getBranch: () => state.branch,
     getHeader: () => ({ cwd: "/tmp/pi-auto-compact" }),
@@ -68,6 +68,7 @@ function createFakeSession({ branch, autoCompactionEnabled = true }) {
     prompt: async () => {},
     sendCustomMessage: async () => {},
     getLastAssistantText: () => "done",
+    getContextUsage: () => state.contextUsage,
     subscribe: () => () => {},
     compact: async (instructions) => {
       state.compactCalls += 1;
@@ -192,4 +193,41 @@ test("the persisted threshold setting decides when to compact", async () => {
     wrapper.destroy();
     rmSync(path.join(agentDir, "pi-desktop-settings.json"), { force: true });
   }
+});
+
+test("a filling context window starts a memory compaction by itself", async () => {
+  const { AgentSessionWrapper } = await loadRpcManager();
+  // Far below the turn threshold, but the window is nearly full: compacting to
+  // memory is what relieves it, so that is what must run.
+  const { inner, state } = createFakeSession({
+    branch: conversationTurns(2),
+    contextUsage: { percent: 82, contextWindow: 200_000, tokens: 164_000 },
+  });
+  const wrapper = new AgentSessionWrapper(inner);
+  try {
+    await wrapper.runExternalTurn({ runId: "run-window", message: "hello", channel: "telegram" });
+    await waitFor(() => state.compactCalls === 1);
+    const instructions = String(state.compactInstructions[0]);
+    assert.match(instructions, /压缩为记忆/);
+    assert.match(instructions, /上下文已占用 82%/);
+  } finally {
+    wrapper.destroy();
+  }
+});
+
+test("a plain compact command is a context compaction, not a memory compaction", async () => {
+  const { AgentSessionWrapper } = await loadRpcManager();
+  const { inner, state } = createFakeSession({ branch: conversationTurns(2) });
+  const wrapper = new AgentSessionWrapper(inner);
+
+  await wrapper.send({ type: "compact", customInstructions: "focus" });
+  assert.equal(state.compactCalls, 1);
+  // pi's own summarization prompt only: no distillation instructions attached.
+  assert.equal(state.compactInstructions[0], "focus");
+
+  await wrapper.send({ type: "compact", mode: "memory" });
+  assert.equal(state.compactCalls, 2);
+  assert.match(String(state.compactInstructions[1]), /^这是一次「压缩为记忆」/);
+
+  wrapper.destroy();
 });

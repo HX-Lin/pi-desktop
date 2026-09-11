@@ -14,7 +14,7 @@ import type {
   ChannelsSnapshot,
   InboundEnvelope,
 } from "../../shared/channel-types";
-import type { AgentSessionWrapper } from "../rpc-manager";
+import type { AgentSessionWrapper, ExternalSessionCommand } from "../rpc-manager";
 import { AdapterRegistry } from "./adapter-registry";
 import { channelCommandHelpText, parseChannelCommand, type ParsedChannelCommand } from "./channel-commands";
 import { ChannelConfigStore } from "./config-store";
@@ -576,7 +576,7 @@ export class ChannelManager {
     binding: ChannelBinding,
     command: ParsedChannelCommand,
   ): Promise<{ finalText: string; sessionId?: string; notifySession?: boolean; actions?: ChannelButtonAction[] }> {
-    if (command.args && !["compact", "project", "session"].includes(command.name)) {
+    if (command.args && !["compact", "memory", "project", "session"].includes(command.name)) {
       return { finalText: `用法：/${command.name}` };
     }
 
@@ -725,19 +725,27 @@ export class ChannelManager {
 
     if (!binding.sessionId) {
       return {
-        finalText: command.name === "compact" ? "当前还没有可压缩的会话。" : "当前还没有可重新加载的会话。",
+        finalText:
+          command.name === "compact" || command.name === "memory"
+            ? "当前还没有可压缩的会话。"
+            : "当前还没有可重新加载的会话。",
       };
     }
 
     const result = await this.bridge.runCommand(
       binding,
-      command.name as "compact" | "reload",
-      command.name === "compact" && command.args ? command.args : undefined,
+      command.name as ExternalSessionCommand,
+      (command.name === "compact" || command.name === "memory") && command.args ? command.args : undefined,
     );
     return {
       sessionId: result.sessionId,
       notifySession: true,
-      finalText: command.name === "compact" ? "当前会话上下文已压缩。" : "已重新加载扩展、Skills、Prompts 和工具。",
+      finalText:
+        command.name === "memory"
+          ? "已压缩为记忆：长期记忆与记忆脚本已更新，已归纳的消息已从会话中删除。"
+          : command.name === "compact"
+            ? "当前会话上下文已压缩（只腾出窗口，消息仍在会话里）。"
+            : "已重新加载扩展、Skills、Prompts 和工具。",
     };
   }
 

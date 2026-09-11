@@ -88,6 +88,8 @@ export interface SessionRuntimeState {
   isStreaming?: boolean;
   isPromptRunning?: boolean;
   isCompacting?: boolean;
+  /** True only while a "压缩为记忆" compaction runs; a plain context compaction is false. */
+  isMemoryCompacting?: boolean;
   extensionStatuses?: ExtensionStatusItem[];
   extensionWidgets?: ExtensionWidgetItem[];
   queuedMessages?: { steering?: string[]; followUp?: string[] } | null;

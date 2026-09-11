@@ -1,5 +1,15 @@
 export type ChannelCommandName =
-  "help" | "status" | "history" | "projects" | "project" | "sessions" | "session" | "new" | "compact" | "reload";
+  | "help"
+  | "status"
+  | "history"
+  | "projects"
+  | "project"
+  | "sessions"
+  | "session"
+  | "new"
+  | "compact"
+  | "memory"
+  | "reload";
 
 export interface ParsedChannelCommand {
   name: ChannelCommandName;
@@ -21,6 +31,7 @@ const SUPPORTED_COMMANDS = new Set<ChannelCommandName>([
   "session",
   "new",
   "compact",
+  "memory",
   "reload",
 ]);
 
@@ -33,7 +44,8 @@ export const CHANNEL_COMMAND_MENU: readonly ChannelCommandMenuItem[] = [
   { command: "sessions", description: "列出当前项目的会话" },
   { command: "session", description: "切换到指定会话" },
   { command: "new", description: "开始新的独立会话" },
-  { command: "compact", description: "压缩当前会话上下文" },
+  { command: "compact", description: "压缩上下文（只腾出窗口，不删消息）" },
+  { command: "memory", description: "压缩为记忆（沉淀长期记忆并删除已归纳消息）" },
   { command: "reload", description: "重新加载扩展和资源" },
 ];
 
@@ -61,7 +73,8 @@ export function channelCommandHelpText(): string {
     "/sessions — 列出当前项目的会话",
     "/session <ID> — 切换到指定会话（可并行续接）",
     "/new — 开始新的独立会话（旧会话继续后台运行）",
-    "/compact [说明] — 压缩当前会话上下文",
+    "/compact [说明] — 压缩上下文（只腾出窗口，不删消息）",
+    "/memory [说明] — 压缩为记忆（沉淀长期记忆 + 记忆脚本，并删除已归纳消息）",
     "/reload — 重新加载扩展、Skills、Prompts 和工具",
   ].join("\n");
 }

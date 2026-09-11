@@ -263,6 +263,7 @@ export function ChatWindow({
     contextUsage,
     forkingEntryId,
     isCompacting,
+    isMemoryCompacting,
     compactError,
     compactResult,
     conversationTurns,
@@ -457,9 +458,11 @@ export function ChatWindow({
       onModelChange={handleModelChange}
       onModelsRefresh={refreshModels}
       onModelsRefreshCancel={cancelModelRefresh}
-      onCompact={session || isNew ? handleCompact : undefined}
+      onCompactContext={session || isNew ? () => void handleCompact("context") : undefined}
+      onCompactMemory={session || isNew ? () => void handleCompact("memory") : undefined}
       onAbortCompaction={handleAbortCompaction}
       isCompacting={isCompacting}
+      isMemoryCompacting={isMemoryCompacting}
       compactError={compactError}
       compactResult={compactResult}
       conversationTurns={conversationTurns}

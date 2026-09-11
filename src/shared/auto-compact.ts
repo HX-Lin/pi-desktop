@@ -41,6 +41,18 @@ export const AUTO_COMPACT_SETTINGS_DEFAULTS: AutoCompactSettings = {
 export const AUTO_COMPACT_HINT_TURNS = 30;
 
 /**
+ * Context fill level that triggers a memory compaction on its own.
+ *
+ * Memory compaction is the operation that also relieves the context window (the
+ * context part is only one piece of it), so filling the window must start it
+ * rather than just dropping a summary into the session.
+ */
+export const AUTO_COMPACT_CONTEXT_PERCENT = 75;
+
+/** Retry after a compaction that could not shrink the context once it grows this much. */
+export const AUTO_COMPACT_RETRY_PERCENT_GROWTH = 5;
+
+/**
  * Detail key that marks a compaction entry as a memory compaction.
  *
  * pi compacts the context on its own whenever the token budget runs out, and

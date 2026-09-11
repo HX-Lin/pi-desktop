@@ -26,7 +26,12 @@ import {
 import { browserCapabilityRuntime } from "./browser-capability-runtime";
 import { browserAgentRuntime } from "./browser-agent-runtime";
 import { projectExtensionDiagnostics } from "./extension-diagnostics";
-import { countBranchConversationMessages, countBranchConversationTurns } from "../shared/auto-compact";
+import {
+  AUTO_COMPACT_CONTEXT_PERCENT,
+  AUTO_COMPACT_RETRY_PERCENT_GROWTH,
+  countBranchConversationMessages,
+  countBranchConversationTurns,
+} from "../shared/auto-compact";
 import { readHostSettings } from "./host-settings";
 import { MEMORY_DISTILLATION_PROMPT, sedimentMemoryScripts } from "./memory-prompt";
 import { syncSessionMemory } from "./memory-store";
@@ -98,7 +103,7 @@ type ExtensionBindingOptions = {
   forceEmptySystemPrompt?: boolean;
 };
 
-export type ExternalSessionCommand = "compact" | "reload";
+export type ExternalSessionCommand = "compact" | "memory" | "reload";
 
 const CODING_TOOL_NAMES = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 const LEGACY_CHANNEL_PROMPT = /^\[外部消息来源：(微信|Telegram|飞书 \/ Lark)\]\n/;
@@ -182,6 +187,9 @@ export class AgentSessionWrapper {
   private _alive = true;
   private autoCompactInFlight = false;
   private autoCompactSkipUntilCount = 0;
+  private autoCompactSkipUntilPercent = 0;
+  /** True while this wrapper is running a "压缩为记忆" compaction. */
+  private memoryCompactionActive = false;
 
   constructor(inner: AgentSessionLike) {
     this.inner = inner;
@@ -220,7 +228,7 @@ export class AgentSessionWrapper {
       // in the model context and must not touch session history. Deleting the
       // summarized turns belongs to a memory compaction, which happens on its own
       // threshold or when the user asks for it.
-      const displayEvent = this.withExternalChannelSource(event);
+      const displayEvent = this.withExternalChannelSource(this.withCompactionScope(event));
       this.emit(displayEvent);
       try {
         this.externalTurnProgress?.(displayEvent);
@@ -239,6 +247,18 @@ export class AgentSessionWrapper {
     const current = this.inner.getActiveToolNames().filter((name) => !isBrowserToolName(name));
     const browserTools = browserToolNamesForSnapshot(browserCapabilityRuntime.getSnapshot());
     this.inner.setActiveToolsByName([...new Set([...current, ...browserTools])]);
+  }
+
+  /**
+   * Tell the renderer which kind of compaction an event belongs to.
+   *
+   * pi reports every compaction the same way, so the memory flag is what lets the
+   * "压缩为记忆" control show its own progress instead of reacting to a plain
+   * context compaction.
+   */
+  private withCompactionScope(event: AgentEvent): AgentEvent {
+    if (event.type !== "compaction_start" && event.type !== "compaction_end") return event;
+    return { ...event, memoryCompaction: this.memoryCompactionActive };
   }
 
   private withExternalChannelSource(event: AgentEvent): AgentEvent {
@@ -417,6 +437,32 @@ export class AgentSessionWrapper {
   }
 
   /**
+   * Re-arm the automatic compaction gates.
+   *
+   * When the session really shrank on both axes the gates open again; otherwise
+   * the next attempt waits for meaningful growth instead of retrying every turn
+   * against a context that cannot be reduced.
+   */
+  private rescheduleAfterAutoCompact(turns: number, percent: number, removed: boolean): void {
+    this.autoCompactSkipUntilCount = removed ? 0 : turns + AUTO_COMPACT_RETRY_TURN_GROWTH;
+    this.autoCompactSkipUntilPercent = removed ? 0 : percent + AUTO_COMPACT_RETRY_PERCENT_GROWTH;
+  }
+
+  /**
+   * "压缩为记忆": the memory prompt, the distilled scripts and the history prune.
+   */
+  private async compactToMemory(extraFocus?: string): Promise<unknown> {
+    this.memoryCompactionActive = true;
+    try {
+      const result = await this.inner.compact(compactToMemoryInstructions(extraFocus));
+      this.pruneSummarizedHistory();
+      return result;
+    } finally {
+      this.memoryCompactionActive = false;
+    }
+  }
+
+  /**
    * Compact automatically once the chat reaches the message threshold.
    *
    * Only runs when the session is fully idle, so a queued or streaming turn
@@ -435,19 +481,26 @@ export class AgentSessionWrapper {
     // its own never postpones this threshold.
     const turns = countBranchConversationTurns(this.inner.sessionManager.getBranch());
     const { autoCompactTurns } = readHostSettings();
-    if (turns < autoCompactTurns || turns < this.autoCompactSkipUntilCount) return;
+    const percent = this.inner.getContextUsage()?.percent ?? 0;
+    // Two ways in, both running the full memory compaction: enough turns, or a
+    // context window that is filling up (the context part is only one piece of
+    // compacting to memory, so filling the window starts the whole thing).
+    const overTurns = turns >= autoCompactTurns && turns >= this.autoCompactSkipUntilCount;
+    const overPercent = percent >= AUTO_COMPACT_CONTEXT_PERCENT && percent >= this.autoCompactSkipUntilPercent;
+    if (!overTurns && !overPercent) return;
+    const reason = overTurns ? `已达到 ${turns} 条对话` : `上下文已占用 ${Math.round(percent)}%`;
 
     this.autoCompactInFlight = true;
     try {
       await this.enqueueTurn(async () => {
-        await this.inner.compact(compactToMemoryInstructions(`已达到 ${turns} 条对话，自动触发。`));
-        this.pruneSummarizedHistory();
+        await this.compactToMemory(`自动触发：${reason}。`);
       });
       const after = countBranchConversationTurns(this.inner.sessionManager.getBranch());
+      const afterPercent = this.inner.getContextUsage()?.percent ?? 0;
       // Nothing was removed — wait for meaningful growth before retrying.
-      this.autoCompactSkipUntilCount = after >= turns ? turns + AUTO_COMPACT_RETRY_TURN_GROWTH : 0;
+      this.rescheduleAfterAutoCompact(after, afterPercent, after < turns);
     } catch (error) {
-      this.autoCompactSkipUntilCount = turns + AUTO_COMPACT_RETRY_TURN_GROWTH;
+      this.rescheduleAfterAutoCompact(turns, percent, false);
       console.error(
         "[pi-desktop] automatic message-count compaction failed:",
         error instanceof Error ? error.message : error,
@@ -561,9 +614,13 @@ export class AgentSessionWrapper {
 
   async runExternalCommand(params: { command: ExternalSessionCommand; customInstructions?: string }): Promise<void> {
     await this.enqueueTurn(async () => {
+      if (params.command === "memory") {
+        await this.compactToMemory(params.customInstructions);
+        return;
+      }
       if (params.command === "compact") {
-        await this.inner.compact(compactToMemoryInstructions(params.customInstructions));
-        this.pruneSummarizedHistory();
+        // Plain context compaction: pi's own prompt, nothing else is touched.
+        await this.inner.compact(params.customInstructions);
         return;
       }
       await this.reloadSessionResources();
@@ -643,6 +700,7 @@ export class AgentSessionWrapper {
           isStreaming: this.inner.isStreaming,
           isPromptRunning: this.promptRunning,
           isCompacting: this.inner.isCompacting,
+          isMemoryCompacting: this.memoryCompactionActive,
           autoCompactionEnabled: this.inner.autoCompactionEnabled,
           autoRetryEnabled: this.inner.autoRetryEnabled,
           model: model ? { id: model.id, provider: model.provider } : undefined,
@@ -730,11 +788,11 @@ export class AgentSessionWrapper {
       case "compact": {
         const result = await this.withFinalRunningNotification(() =>
           this.enqueueTurn(async () => {
-            const compacted = await this.inner.compact(
-              compactToMemoryInstructions(command.customInstructions as string | undefined),
-            );
-            this.pruneSummarizedHistory();
-            return compacted;
+            const focus = command.customInstructions as string | undefined;
+            // Only an explicit memory request distills and prunes; a plain
+            // "compact" frees the context window and leaves history alone.
+            if (command.mode === "memory") return await this.compactToMemory(focus);
+            return await this.inner.compact(focus);
           }),
         );
         return result;

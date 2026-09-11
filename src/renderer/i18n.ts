@@ -488,7 +488,7 @@ const zhCN: Record<string, string> = {
   compact: "压缩上下文",
   compacting: "正在压缩…",
   stopCompaction: "停止压缩",
-  compactAutoHint: "已有 {count} 条对话未沉淀，达到 {threshold} 条将压缩为记忆",
+  compactAutoHint: "已有 {count} 条对话未沉淀，达到 {threshold} 条或上下文将满时压缩为记忆",
   compactAutoRunning: "已有 {count} 条对话，正在压缩为记忆",
   compactMessageDetail: "当前上下文 {messages} 条消息",
   autoCompactSection: "长对话压缩",

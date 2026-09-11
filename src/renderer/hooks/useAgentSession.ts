@@ -375,6 +375,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [currentModelOverride, setCurrentModelOverride] = useState<{ provider: string; modelId: string } | null>(null);
   const [pendingModel, setPendingModel] = useState<{ provider: string; modelId: string } | null>(null);
   const [isCompacting, setIsCompacting] = useState(false);
+  const [isMemoryCompacting, setIsMemoryCompacting] = useState(false);
   const [compactError, setCompactError] = useState<string | null>(null);
   const [compactResult, setCompactResult] = useState<CompactResultInfo | null>(null);
   useEffect(() => {
@@ -1029,6 +1030,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         // would otherwise leave the "Stop compaction" UI stuck. No state
         // (wrapper destroyed) means nothing is compacting.
         setIsCompacting(state?.isCompacting ?? false);
+        setIsMemoryCompacting(state?.isMemoryCompacting === true);
         if (state?.conversationTurns !== undefined) setConversationTurns(state.conversationTurns);
         if (state?.messageCount !== undefined) setConversationMessageCount(state.messageCount);
         if (state?.autoCompactThreshold !== undefined) setAutoCompactThreshold(state.autoCompactThreshold);
@@ -1219,12 +1221,14 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         case "auto_compaction_start":
         case "compaction_start":
           setIsCompacting(true);
+          setIsMemoryCompacting(event.memoryCompaction === true);
           setCompactError(null);
           setCompactResult(null);
           break;
         case "auto_compaction_end":
         case "compaction_end":
           setIsCompacting(false);
+          setIsMemoryCompacting(false);
           if (event.errorMessage) {
             setCompactError(event.errorMessage as string);
             setCompactResult(null);
@@ -1453,23 +1457,36 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     [isNew, setNewSessionModel],
   );
 
-  const handleCompact = useCallback(async () => {
-    const sid = sessionIdRef.current;
-    if (!sid || isCompacting) return;
-    setIsCompacting(true);
-    setCompactError(null);
-    setCompactResult(null);
-    try {
-      const result = await sendAgentCommand<CompactCommandResult>(sid, { type: "compact" });
-      setCompactResult(readCompactResult(result, "manual"));
-      await loadSession(sid, true);
-    } catch (e) {
-      setCompactError(e instanceof Error ? e.message : String(e));
+  /**
+   * `memory` runs the full "压缩为记忆" pass (distillation prompt, sedimented
+   * scripts, history prune); `context` is pi's own plain context compaction that
+   * only frees the window and leaves the session history alone.
+   */
+  const handleCompact = useCallback(
+    async (mode: "memory" | "context") => {
+      const sid = sessionIdRef.current;
+      if (!sid || isCompacting) return;
+      setIsCompacting(true);
+      if (mode === "memory") setIsMemoryCompacting(true);
+      setCompactError(null);
       setCompactResult(null);
-    } finally {
-      setIsCompacting(false);
-    }
-  }, [isCompacting, loadSession]);
+      try {
+        const result = await sendAgentCommand<CompactCommandResult>(sid, {
+          type: "compact",
+          ...(mode === "memory" ? { mode: "memory" } : {}),
+        });
+        setCompactResult(readCompactResult(result, mode === "memory" ? "manual" : "context"));
+        await loadSession(sid, true);
+      } catch (e) {
+        setCompactError(e instanceof Error ? e.message : String(e));
+        setCompactResult(null);
+      } finally {
+        setIsCompacting(false);
+        setIsMemoryCompacting(false);
+      }
+    },
+    [isCompacting, loadSession],
+  );
 
   const applyModelsResult = useCallback(
     (d: ModelsListResult) => {
@@ -1872,6 +1889,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         }
         if (agentState?.state) {
           if (agentState.state.isCompacting !== undefined) setIsCompacting(agentState.state.isCompacting);
+          if (agentState.state.isMemoryCompacting !== undefined)
+            setIsMemoryCompacting(agentState.state.isMemoryCompacting);
           if (agentState.state.conversationTurns !== undefined)
             setConversationTurns(agentState.state.conversationTurns);
           if (agentState.state.messageCount !== undefined) setConversationMessageCount(agentState.state.messageCount);
@@ -2025,6 +2044,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     systemPrompt,
     forkingEntryId,
     isCompacting,
+    isMemoryCompacting,
     compactError,
     compactResult,
     conversationTurns,

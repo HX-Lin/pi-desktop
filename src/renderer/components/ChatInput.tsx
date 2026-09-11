@@ -58,9 +58,14 @@ interface Props {
   onModelChange?: (provider: string, modelId: string) => void;
   onModelsRefresh?: () => Promise<void> | void;
   onModelsRefreshCancel?: () => void;
-  onCompact?: () => void;
+  /** Plain context compaction (pi's own pass): frees the window, keeps history. */
+  onCompactContext?: () => void;
+  /** "压缩为记忆": distillation prompt, sedimented scripts, history prune. */
+  onCompactMemory?: () => void;
   onAbortCompaction?: () => void;
   isCompacting?: boolean;
+  /** Only the memory compaction control reacts to this; a plain context compaction is false. */
+  isMemoryCompacting?: boolean;
   compactError?: string | null;
   compactResult?: CompactResultInfo | null;
   /** Conversation turns (user messages) on the active branch. */
@@ -232,9 +237,11 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
     onModelChange,
     onModelsRefresh,
     onModelsRefreshCancel,
-    onCompact,
+    onCompactContext,
+    onCompactMemory,
     onAbortCompaction,
     isCompacting,
+    isMemoryCompacting = false,
     compactError,
     compactResult,
     conversationTurns = 0,
@@ -961,12 +968,15 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
   const compactHintAt = Math.min(AUTO_COMPACT_HINT_TURNS, Math.max(1, compactThreshold - 1));
   // Always show the compaction control for any chat (even empty ones) so the
   // manual action is permanently discoverable, never gated on message count.
-  const showCompactHint = Boolean(onCompact);
+  const showCompactHint = Boolean(onCompactMemory);
   const compactIsNearLimit = conversationTurns >= compactHintAt;
   const compactBarText =
     conversationTurns >= compactThreshold
       ? t("compactAutoRunning", "{count} conversations pending — compacting to memory now")
-      : t("compactAutoHint", "{count} conversations pending — compacts to memory at {threshold}");
+      : t(
+          "compactAutoHint",
+          "{count} conversations pending — compacts to memory at {threshold} or when the context fills",
+        );
   const compactBarLabel = compactBarText
     .replace("{count}", String(conversationTurns))
     .replace("{threshold}", String(compactThreshold))
@@ -1318,7 +1328,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
             </span>
             <button
               type="button"
-              onClick={() => (isCompacting ? onAbortCompaction?.() : onCompact?.())}
+              onClick={() => (isMemoryCompacting ? onAbortCompaction?.() : onCompactMemory?.())}
               disabled={isStreaming && !isCompacting}
               style={{
                 flexShrink: 0,
@@ -1333,7 +1343,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                 opacity: isStreaming && !isCompacting ? 0.5 : 1,
               }}
             >
-              {isCompacting ? t("compacting", "Compacting…") : t("compactNow", "Compact to memory")}
+              {isMemoryCompacting ? t("compacting", "Compacting…") : t("compactNow", "Compact to memory")}
             </button>
           </div>
         )}
@@ -2466,7 +2476,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                 </div>
               )}
 
-              {onCompact && (
+              {onCompactContext && (
                 <div style={{ position: "relative" }}>
                   {compactError && (
                     <div
@@ -2493,7 +2503,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                     onClick={() => {
                       closeControlDropdowns();
                       if (isCompacting) onAbortCompaction?.();
-                      else onCompact();
+                      else onCompactContext();
                     }}
                     disabled={isStreaming && !isCompacting}
                     style={{
