@@ -43,6 +43,29 @@ export { countBranchConversationMessages };
 const AUTO_COMPACT_RETRY_TURN_GROWTH = 10;
 
 /**
+ * Rebuild the in-memory conversation from the session file.
+ *
+ * pi only refreshes `agent.state.messages` on its own compaction/tree operations,
+ * so without this the model would keep the pre-prune summary after a memory
+ * compaction — the capped memory (and the pruned tail) would only take effect at
+ * the next rebuild. The rewrite therefore has to be mirrored into the live
+ * context, otherwise the memory file is not really "loaded" into the session.
+ */
+function reloadAgentMessagesFromSession(session: AgentSessionLike): void {
+  try {
+    const state = session.agent?.state;
+    const manager = session.sessionManager;
+    if (!state || typeof manager?.buildSessionContext !== "function") return;
+    state.messages = manager.buildSessionContext().messages as unknown[];
+  } catch (error) {
+    console.error(
+      "[pi-desktop] failed to reload session context after pruning:",
+      error instanceof Error ? error.message : error,
+    );
+  }
+}
+
+/**
  * "压缩为记忆" instructions.
  *
  * Every desktop-triggered compaction is a memory compaction, so the distillation
@@ -536,6 +559,7 @@ export class AgentSessionWrapper {
       if (kept === entries) return;
       writeSessionFileEntries(filePath, header, kept);
       manager.setSessionFile(filePath);
+      reloadAgentMessagesFromSession(this.inner);
     } catch (error) {
       console.error("[pi-desktop] session pruning failed:", error instanceof Error ? error.message : error);
     }

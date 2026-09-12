@@ -86,3 +86,18 @@ test("sessions without an id are left untouched", async () => {
 
   assert.equal(result, undefined);
 });
+
+test("the archived memory is pointed at once it exists", async () => {
+  const handlers = captureHandlers();
+  const sessionId = "session-archived";
+  mkdirSync(path.join(fixtureRoot, "memory", sessionId), { recursive: true });
+  writeFileSync(path.join(fixtureRoot, "memory", sessionId, "secondary.md"), "## Old memory\nretired\n", "utf8");
+
+  const result = await handlers.before_agent_start(
+    { prompt: "hi", systemPrompt: "BASE" },
+    { sessionManager: { getSessionId: () => sessionId } },
+  );
+
+  assert.ok(result.systemPrompt.includes("记忆归档"));
+  assert.ok(result.systemPrompt.includes(path.join(fixtureRoot, "memory", sessionId, "secondary.md")));
+});

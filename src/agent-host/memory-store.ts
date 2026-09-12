@@ -132,6 +132,37 @@ export function writeMemoryScript(sessionId: string, name: string, content: stri
 }
 
 /**
+ * Point the model at the archived memory, if any has sunk out of the context.
+ *
+ * Retired memory is only on disk; without this the model would never know it
+ * exists. Returns null while everything still fits in the active memory.
+ */
+export function memoryArchiveNotice(sessionId: string): string | null {
+  const path = secondaryMemoryPath(sessionId);
+  let bytes = 0;
+  try {
+    bytes = statSync(path).size;
+  } catch {
+    return null;
+  }
+  if (bytes <= 0) return null;
+  return [
+    "## 记忆归档（已下沉，不在你的上下文里）",
+    "",
+    `归档文件：\`${path}\`（${formatBytes(bytes)}）`,
+    "",
+    "需要更早的记忆时自己检索，不要整篇读入：",
+    "`rg -n \"关键词\" <归档文件>` 或 `sed -n '1,120p' <归档文件>`",
+  ].join("\n");
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
  * Render the index that tells the model which scripts exist.
  *
  * The directory is created on the way so the model always has somewhere to drop

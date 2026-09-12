@@ -26,7 +26,9 @@ const {
   PRIMARY_MEMORY_MAX_BYTES,
   SECONDARY_MEMORY_MAX_BYTES,
   listMemoryScripts,
+  memoryArchiveNotice,
   memoryScriptIndex,
+  secondaryMemoryPath,
   memoryScriptsDir,
   readPrimaryMemory,
   readSecondaryMemory,
@@ -145,4 +147,18 @@ test("the index ignores dotfiles and directories", () => {
   const index = memoryScriptIndex(sessionId);
   assert.ok(index.includes("（暂无脚本）"));
   assert.ok(index.includes(memoryScriptsDir(sessionId)));
+});
+
+test("the archived memory is announced to the model only once it exists", () => {
+  assert.equal(memoryArchiveNotice("session-no-archive"), null);
+
+  // Force a spill: one memory text larger than the primary cap can hold.
+  const sessionId = "session-archive-notice";
+  const oversized = Array.from({ length: 5 }, (_, index) => section(`Batch ${index}`, 1024 * 1024)).join("");
+  syncSessionMemory(sessionId, oversized);
+
+  const notice = memoryArchiveNotice(sessionId);
+  assert.ok(notice, "expected an archive notice");
+  assert.ok(notice.includes(secondaryMemoryPath(sessionId)));
+  assert.ok(notice.includes("记忆归档"));
 });

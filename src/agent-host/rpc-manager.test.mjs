@@ -48,14 +48,22 @@ function conversationTurns(count) {
   return Array.from({ length: count }, () => [message("user"), message("assistant"), message("assistant")]).flat();
 }
 
-function createFakeSession({ branch, autoCompactionEnabled = true, contextUsage = null }) {
+function createFakeSession({
+  branch,
+  autoCompactionEnabled = true,
+  contextUsage = null,
+  sessionFile,
+  contextMessages,
+}) {
   const state = { branch: [...branch], compactCalls: 0, compactInstructions: [], contextUsage };
   const sessionManager = {
     getBranch: () => state.branch,
     getHeader: () => ({ cwd: "/tmp/pi-auto-compact" }),
     appendCustomEntry: () => "entry",
     getSessionId: () => "session-auto-compact",
-    getSessionFile: () => "/tmp/pi-auto-compact.jsonl",
+    getSessionFile: () => sessionFile ?? "/tmp/pi-auto-compact.jsonl",
+    setSessionFile: () => undefined,
+    buildSessionContext: () => ({ messages: contextMessages ?? [] }),
   };
   const base = {
     sessionId: "session-auto-compact",
@@ -230,4 +238,50 @@ test("a plain compact command is a context compaction, not a memory compaction",
   assert.match(String(state.compactInstructions[1]), /^这是一次「压缩为记忆」/);
 
   wrapper.destroy();
+});
+
+test("a memory compaction loads the rewritten memory back into the session", async () => {
+  const { AgentSessionWrapper } = await loadRpcManager();
+  const dir = mkdtempSync(path.join(tmpdir(), "pi-compact-load-"));
+  const filePath = path.join(dir, "session.jsonl");
+  writeFileSync(
+    filePath,
+    `${[
+      { type: "session", version: 3, id: "session-load", timestamp: new Date().toISOString(), cwd: dir },
+      { type: "message", id: "u1", parentId: null, message: { role: "user", content: "old" } },
+      {
+        type: "compaction",
+        id: "c1",
+        parentId: "u1",
+        summary: "## Goal\nlong memory",
+        firstKeptEntryId: "u1",
+        tokensBefore: 10,
+      },
+    ]
+      .map((entry) => JSON.stringify(entry))
+      .join("\n")}\n`,
+    "utf8",
+  );
+
+  // What pi's session manager would hand back after the file was rewritten.
+  const reloadedMessages = [{ role: "user", content: "memory + kept tail from disk" }];
+  const { inner, state } = createFakeSession({
+    branch: [],
+    sessionFile: filePath,
+    contextMessages: reloadedMessages,
+  });
+  const wrapper = new AgentSessionWrapper(inner);
+
+  await wrapper.send({ type: "compact", mode: "memory" });
+  // The rewrite must become the live context, not just sit in the file.
+  assert.deepEqual(inner.agent.state.messages, reloadedMessages);
+
+  // A plain context compaction leaves the live context alone.
+  inner.agent.state.messages = [{ role: "user", content: "untouched" }];
+  await wrapper.send({ type: "compact" });
+  assert.deepEqual(inner.agent.state.messages, [{ role: "user", content: "untouched" }]);
+
+  wrapper.destroy();
+  rmSync(dir, { recursive: true, force: true });
+  assert.equal(state.compactCalls, 2);
 });
