@@ -43,8 +43,6 @@ interface Props {
   onSystemPromptChange?: (prompt: string | null) => void;
   onSessionStatsChange?: (stats: SessionStatsInfo | null) => void;
   onSessionStatsPanelOpen?: () => void;
-  /** Open a URL in the app's browser dock (used for the Accordion context map). */
-  onOpenUrl?: (url: string) => void;
   onContextUsageChange?: (
     usage: { percent: number | null; contextWindow: number; tokens: number | null } | null,
   ) => void;
@@ -225,7 +223,6 @@ export function ChatWindow({
   onSystemPromptChange,
   onSessionStatsChange,
   onSessionStatsPanelOpen,
-  onOpenUrl,
   onContextUsageChange,
   onOpenFile,
 }: Props) {
@@ -421,6 +418,9 @@ export function ChatWindow({
   // first paint).
   const [visibleMessageCount, setVisibleMessageCount] = useState(Number.MAX_SAFE_INTEGER);
   const [memoryPanelOpen, setMemoryPanelOpen] = useState(false);
+  // The map reads host state on demand; re-reading after each turn keeps the tiles
+  // honest without polling while the panel is closed.
+  const memoryPanelRefreshKey = useMemo(() => messages.length + entryIds.length, [messages.length, entryIds.length]);
   useEffect(() => {
     setVisibleMessageCount(24);
     let raf2 = 0;
@@ -595,8 +595,7 @@ export function ChatWindow({
       {memoryPanelOpen && (
         <MemoryMapPanel
           sessionId={sessionStats?.sessionId ?? session?.id ?? null}
-          cwd={session?.cwd ?? newSessionCwd ?? null}
-          onOpenUrl={onOpenUrl ?? undefined}
+          contextRefreshKey={memoryPanelRefreshKey}
           onClose={() => setMemoryPanelOpen(false)}
         />
       )}

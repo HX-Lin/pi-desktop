@@ -77,8 +77,9 @@ import {
 } from "../shared/file-types";
 import { createFileWatchService } from "./file-watch";
 import { countBranchConversationMessages, countBranchConversationTurns } from "../shared/auto-compact";
-import { readAccordionStatus } from "./accordion-registry";
 import { readHostSettings, writeHostSettings } from "./host-settings";
+import type { ContextFoldCommand } from "../shared/api-types";
+import { applyFoldCommand, emptyFoldSnapshot, peekFoldSession } from "./context-fold";
 import { readMemoryOverview } from "./memory-store";
 import { callMain } from "./parent-rpc";
 import { createAuthLoginService, resolveLoginCode } from "./auth-login";
@@ -620,7 +621,17 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
       return { content: lines.join("\n"), suggestedName: `session-${id}.md` };
     },
 
-    "accordion.status": async () => readAccordionStatus(),
+    "context.map": async (params) => {
+      const { sessionId } = params as { sessionId: string };
+      if (!sessionId) throw new RpcError({ code: "INVALID_ARGUMENT", message: "sessionId is required" });
+      return peekFoldSession(sessionId) ?? emptyFoldSnapshot(sessionId);
+    },
+
+    "context.fold": async (params) => {
+      const { sessionId, command } = params as { sessionId: string; command: ContextFoldCommand };
+      if (!sessionId) throw new RpcError({ code: "INVALID_ARGUMENT", message: "sessionId is required" });
+      return applyFoldCommand(sessionId, command);
+    },
 
     "memory.overview": async (params) => {
       const { sessionId } = params as { sessionId: string };

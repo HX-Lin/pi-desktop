@@ -33,6 +33,7 @@ import {
   countBranchConversationTurns,
 } from "../shared/auto-compact";
 import { readHostSettings } from "./host-settings";
+import { getFoldSession } from "./context-fold";
 import { MEMORY_DISTILLATION_PROMPT } from "./memory-prompt";
 import { planMemoryCompaction, type MemoryCompactionPlan } from "./memory-compaction";
 import { pruneSummarizedEntries, readSessionFileEntries, writeSessionFileEntries } from "./session-prune";
@@ -245,6 +246,16 @@ export class AgentSessionWrapper {
   }
 
   start(): void {
+    // The protected tail of the fold engine mirrors pi's own keep-recent budget, so
+    // what folding refuses to touch is exactly what pi would have kept anyway.
+    try {
+      const keepRecent = this.inner.settingsManager.getCompactionKeepRecentTokens();
+      if (typeof keepRecent === "number" && keepRecent > 0) {
+        getFoldSession(this.sessionId).setProtectTokens(keepRecent);
+      }
+    } catch {
+      // Settings unavailable: the engine keeps its own default.
+    }
     this.unsubscribe = this.inner.subscribe((event: AgentEvent) => {
       this.resetIdleTimer();
       // pi's own token-budget compaction is left alone here: it only frees room

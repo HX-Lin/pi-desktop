@@ -11,25 +11,24 @@
  * Clicking a tile inspects it. Nothing here mutates anything.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AccordionSessionStatus, AccordionStatus, MemoryOverview } from "@shared/api-types";
+import type { MemoryOverview } from "@shared/api-types";
 import { useI18n } from "@/i18n";
-import { accordionStatus, memoryOverview } from "@/lib/api-client";
+import { memoryOverview } from "@/lib/api-client";
+import { ContextFoldMap } from "./ContextFoldMap";
 
 interface MemoryMapPanelProps {
   sessionId: string | null;
-  cwd: string | null;
   onClose: () => void;
-  /** Open a URL in the app's own browser dock. */
-  onOpenUrl?: (url: string) => void;
+  /** Bumped when the chat thinks the context changed, so the map can refresh. */
+  contextRefreshKey?: number;
 }
 
 type Tab = "memory" | "context";
 
-export function MemoryMapPanel({ sessionId, cwd, onClose, onOpenUrl }: MemoryMapPanelProps) {
+export function MemoryMapPanel({ sessionId, onClose, contextRefreshKey = 0 }: MemoryMapPanelProps) {
   const { t } = useI18n();
   const [tab, setTab] = useState<Tab>("memory");
   const [overview, setOverview] = useState<MemoryOverview | null>(null);
-  const [accordion, setAccordion] = useState<AccordionStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<Tile | null>(null);
@@ -42,10 +41,11 @@ export function MemoryMapPanel({ sessionId, cwd, onClose, onOpenUrl }: MemoryMap
     }
     setLoading(true);
     setError(null);
-    const [memory, maps] = await Promise.allSettled([memoryOverview(sessionId), accordionStatus()]);
-    if (memory.status === "fulfilled") setOverview(memory.value);
-    else setError(memory.reason instanceof Error ? memory.reason.message : String(memory.reason));
-    setAccordion(maps.status === "fulfilled" ? maps.value : { running: false, sessions: [] });
+    try {
+      setOverview(await memoryOverview(sessionId));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
     setLoading(false);
   }, [sessionId]);
 
@@ -63,10 +63,6 @@ export function MemoryMapPanel({ sessionId, cwd, onClose, onOpenUrl }: MemoryMap
   }, [onClose]);
 
   const tiles = useMemo(() => buildTiles(overview, t), [overview, t]);
-  const liveAccounts = useMemo(
-    () => (accordion?.sessions ?? []).slice().sort((left, right) => Number(right.live) - Number(left.live)),
-    [accordion],
-  );
 
   return (
     <div style={overlayStyle} onClick={onClose}>
@@ -134,15 +130,7 @@ export function MemoryMapPanel({ sessionId, cwd, onClose, onOpenUrl }: MemoryMap
             </>
           )}
 
-          {tab === "context" && (
-            <ContextTab
-              sessions={liveAccounts}
-              cwd={cwd}
-              onOpenUrl={onOpenUrl}
-              hasMemory={Boolean(overview?.exists)}
-              memoryPath={overview?.primary?.path}
-            />
-          )}
+          {tab === "context" && <ContextFoldMap sessionId={sessionId} refreshKey={contextRefreshKey} />}
         </div>
       </div>
     </div>
@@ -437,121 +425,6 @@ function Inspector({ tile }: { tile: Tile | null }) {
   );
 }
 
-function ContextTab({
-  sessions,
-  cwd,
-  onOpenUrl,
-  hasMemory,
-  memoryPath,
-}: {
-  sessions: AccordionSessionStatus[];
-  cwd: string | null;
-  onOpenUrl?: (url: string) => void;
-  hasMemory: boolean;
-  memoryPath?: string;
-}) {
-  const { t } = useI18n();
-  const live = sessions.filter((session) => session.live);
-  const preferred = live.find((session) => session.cwd === cwd) ?? live[0];
-
-  return (
-    <div style={{ display: "grid", gap: 12 }}>
-      <section>
-        <h3 style={{ margin: 0, fontSize: 12, color: "var(--text)" }}>
-          {t("contextAccordion", "Accordion context map")}
-        </h3>
-        <p style={{ margin: "6px 0 10px", fontSize: 11, lineHeight: 1.6, color: "var(--text-dim)" }}>
-          {t(
-            "contextAccordionHint",
-            "Accordion (pi extension) serves a live map of the context window: every block sized by weight, coloured by kind, foldable and reversible. The desktop app opens that map in its own browser panel.",
-          )}
-        </p>
-        {!hasMemory && <Hint>{t("contextNoMemory", "This session has no memory yet.")}</Hint>}
-        {live.length === 0 ? (
-          <Hint>
-            {t(
-              "contextNoAccordion",
-              "No live Accordion map. Install it with `pi install npm:@a-fig/accordion`, restart, then run /accordion in the session to print the map link.",
-            )}
-          </Hint>
-        ) : (
-          <div style={{ display: "grid", gap: 6 }}>
-            {preferred && onOpenUrl ? (
-              <button type="button" onClick={() => onOpenUrl(preferred.url)} style={primaryButtonStyle}>
-                {t("contextOpen", "Open map in app")} · 127.0.0.1:{preferred.port}
-              </button>
-            ) : null}
-            {sessions.map((session) => (
-              <div
-                key={session.sessionId}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  padding: "6px 10px",
-                  fontSize: 11,
-                  border: "1px solid var(--border)",
-                  borderRadius: 6,
-                  background: "var(--bg-subtle)",
-                  opacity: session.live ? 1 : 0.55,
-                }}
-              >
-                <span style={{ fontFamily: "var(--font-mono)", color: "var(--text)" }}>{session.port}</span>
-                <span
-                  style={{
-                    flex: 1,
-                    minWidth: 0,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                    color: "var(--text-muted)",
-                  }}
-                >
-                  {session.cwd ?? session.sessionId}
-                </span>
-                <span style={{ color: "var(--text-dim)" }}>
-                  {session.tokens ? `${session.tokens.toLocaleString()} tok` : (session.model ?? "")}
-                </span>
-                <span style={{ color: session.live ? "var(--accent)" : "var(--text-dim)" }}>
-                  {session.live ? t("live", "live") : t("stale", "stale")}
-                </span>
-              </div>
-            ))}
-            <p style={{ margin: 0, fontSize: 10, lineHeight: 1.6, color: "var(--text-dim)" }}>
-              {t(
-                "contextTokenHint",
-                "First visit needs the token link printed by /accordion; it is remembered as a cookie afterwards.",
-              )}
-            </p>
-          </div>
-        )}
-      </section>
-
-      {memoryPath ? (
-        <section>
-          <h3 style={{ margin: 0, fontSize: 12, color: "var(--text)" }}>{t("contextMemoryFile", "Memory file")}</h3>
-          <code
-            style={{
-              display: "block",
-              marginTop: 6,
-              padding: "6px 8px",
-              fontSize: 10,
-              fontFamily: "var(--font-mono)",
-              color: "var(--text-muted)",
-              background: "var(--bg-subtle)",
-              border: "1px solid var(--border)",
-              borderRadius: 6,
-              overflowWrap: "anywhere",
-            }}
-          >
-            {memoryPath}
-          </code>
-        </section>
-      ) : null}
-    </div>
-  );
-}
-
 function Hint({ children, tone }: { children: React.ReactNode; tone?: "error" }) {
   return (
     <p
@@ -608,18 +481,6 @@ const ghostButtonStyle = {
   border: "1px solid var(--border)",
   borderRadius: 6,
   cursor: "pointer",
-} as const;
-
-const primaryButtonStyle = {
-  padding: "7px 12px",
-  fontSize: 12,
-  fontWeight: 600,
-  color: "#fff",
-  background: "var(--accent)",
-  border: "none",
-  borderRadius: 6,
-  cursor: "pointer",
-  justifySelf: "start",
 } as const;
 
 function formatBytes(bytes: number): string {

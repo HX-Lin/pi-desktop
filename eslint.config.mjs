@@ -8,6 +8,8 @@ const sourceFiles = ["src/**/*.{ts,tsx}"];
 
 export default tseslint.config(
   {
+    // Global ignores must be their own object: a config that also carries other keys
+    // narrows `ignores` to that config instead of excluding the paths outright.
     ignores: [
       "**/.artifacts/**",
       "**/build/**",
@@ -16,6 +18,8 @@ export default tseslint.config(
       "**/out/**",
       "src/agent-host/vendor/**",
     ],
+  },
+  {
     linterOptions: {
       reportUnusedDisableDirectives: "error",
     },

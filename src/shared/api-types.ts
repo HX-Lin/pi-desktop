@@ -23,27 +23,67 @@ export interface SkillUpdateParams {
   content?: string;
 }
 
-/** One live Accordion context map (the pi extension registers itself on disk). */
-export interface AccordionSessionStatus {
-  sessionId: string;
-  port: number;
-  /** Map URL; the first visit still needs the token link printed by /accordion. */
-  url: string;
-  cwd?: string;
-  title?: string;
-  model?: string;
-  tokens?: number;
-  contextWindow?: number;
-  startedAt?: number;
-  heartbeatAt: number;
-  /** False once the heartbeat goes stale (the session ended or crashed). */
-  live: boolean;
+/** Kinds the fold engine distinguishes in the context window. */
+export type ContextBlockKind = "system" | "user" | "text" | "thinking" | "tool_call" | "tool_result";
+
+/** One block of the context window, as the map renders it. */
+export interface ContextBlockView {
+  id: string;
+  kind: ContextBlockKind;
+  label: string;
+  turn: number;
+  order: number;
+  /** Tokens this block costs right now (its folded size when folded). */
+  tokens: number;
+  /** Tokens at full fidelity. */
+  fullTokens: number;
+  folded: boolean;
+  pinned: boolean;
+  /** Inside the protected working tail: never folded automatically. */
+  protectedBlock: boolean;
+  foldable: boolean;
+  /** The `{#code FOLDED}` digest standing in for this block, when folded. */
+  digest: string;
+  preview: string;
 }
 
-export interface AccordionStatus {
-  running: boolean;
-  sessions: AccordionSessionStatus[];
+export interface ContextMapSnapshot {
+  sessionId: string;
+  /** True once the user armed folding for this session. */
+  folding: boolean;
+  stats: {
+    rev: number;
+    liveTokens: number;
+    fullTokens: number;
+    savedTokens: number;
+    budget: number;
+    contextWindow: number | null;
+    protectTokens: number;
+    blockCount: number;
+    foldedCount: number;
+    protectedFromIndex: number;
+  };
+  blocks: ContextBlockView[];
+  truncated: boolean;
 }
+
+export interface ContextFoldRefusal {
+  id: string;
+  reason: string;
+}
+
+export interface ContextFoldResult {
+  applied: number;
+  refused: ContextFoldRefusal[];
+  snapshot: ContextMapSnapshot;
+}
+
+/** Steering command from the map. */
+export type ContextFoldCommand =
+  | { action: "fold" | "unfold" | "pin" | "unpin"; ids: string[] }
+  | { action: "reset" }
+  | { action: "folding"; enabled: boolean }
+  | { action: "budget" | "protect"; tokens: number };
 
 /** One `## section` of a memory text, sized so the UI can draw it as a tile. */
 export interface MemorySectionOverview {

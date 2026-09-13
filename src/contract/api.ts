@@ -19,7 +19,9 @@ import type {
   WorktreeInfo,
 } from "./types";
 import type {
-  AccordionStatus,
+  ContextFoldCommand,
+  ContextFoldResult,
+  ContextMapSnapshot,
   GitStatusResult,
   MemoryOverview,
   PluginActionParams,
@@ -202,9 +204,13 @@ export interface Api {
     params: { path: string; sourceSessionId?: string };
     result: { base64: string; size: number; mime: string };
   };
-  "accordion.status": {
-    params: void;
-    result: AccordionStatus;
+  "context.map": {
+    params: { sessionId: string };
+    result: ContextMapSnapshot;
+  };
+  "context.fold": {
+    params: { sessionId: string; command: ContextFoldCommand };
+    result: ContextFoldResult;
   };
 
   "memory.overview": {

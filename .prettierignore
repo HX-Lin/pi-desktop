@@ -4,3 +4,6 @@ dist/
 node_modules/
 out/
 package-lock.json
+# Vendored upstream source keeps its own formatting so a diff against
+# github.com/a-Fig/Accordion stays readable when resyncing (see NOTICE.md there).
+src/agent-host/vendor/

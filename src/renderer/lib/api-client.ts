@@ -4,6 +4,7 @@
  */
 import { createRpcClient, type PiRpc } from "@contract/rpc";
 import type { ApiMethod, ApiParams, ApiResult, StreamTopic, Streams } from "@contract/api";
+import type { ContextFoldCommand } from "@shared/api-types";
 
 let rpc: PiRpc | null = null;
 let connectPromise: Promise<PiRpc> | null = null;
@@ -230,9 +231,14 @@ export async function cancelModelsRefresh(requestId: string) {
   return call("models.refreshCancel", { requestId });
 }
 
-/** Live Accordion context maps registered on this machine. */
-export async function accordionStatus() {
-  return call("accordion.status");
+/** The context window as the fold engine sees it. */
+export async function contextMap(sessionId: string) {
+  return call("context.map", { sessionId });
+}
+
+/** Fold / unfold / pin blocks, or arm folding for a session. */
+export async function contextFold(sessionId: string, command: ContextFoldCommand) {
+  return call("context.fold", { sessionId, command });
 }
 
 /** Read-only summary of what "压缩为记忆" has stored for a session. */

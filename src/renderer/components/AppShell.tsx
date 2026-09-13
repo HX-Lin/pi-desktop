@@ -799,29 +799,6 @@ export function AppShell() {
     [openRightPanel],
   );
 
-  /**
-   * Open a URL in the app's own browser panel.
-   *
-   * Used by the memory map to show Accordion's live context map without sending
-   * the user to an external browser.
-   */
-  const handleOpenUrlInBrowser = useCallback(
-    async (url: string) => {
-      try {
-        await window.piBridge.browserCreateUserTab({
-          url,
-          ownerSessionId: selectedSession?.id ?? null,
-          activate: true,
-        });
-        setActiveFileTabId(BROWSER_TAB_ID);
-        openRightPanel();
-      } catch {
-        // Opening the map is best-effort: the panel still shows the URL to copy.
-      }
-    },
-    [openRightPanel, selectedSession?.id],
-  );
-
   const handleOpenLinkedFile = useCallback(
     (filePath: string) => {
       handleOpenFile(filePath, getFileName(filePath), selectedSession?.id ?? null);
@@ -1696,7 +1673,6 @@ export function AppShell() {
                     onSessionStatsPanelOpen={openSessionStatsPanel}
                     onContextUsageChange={handleContextUsageChange}
                     onOpenFile={handleOpenLinkedFile}
-                    onOpenUrl={(url) => void handleOpenUrlInBrowser(url)}
                   />
                 </SessionProfiler>
               ) : showPlaceholder ? (
