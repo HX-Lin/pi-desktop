@@ -91,112 +91,116 @@ export function ContextFoldMap({ sessionId, refreshKey = 0 }: ContextFoldMapProp
   const overBudget = stats.budget > 0 && stats.liveTokens > stats.budget;
 
   return (
-    <div style={{ display: "grid", gap: 12 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <button
-          type="button"
-          onClick={() => void send({ action: "folding", enabled: !snapshot.folding })}
-          disabled={busy}
-          style={{
-            ...toggleStyle,
-            background: snapshot.folding ? "var(--accent)" : "transparent",
-            borderColor: snapshot.folding ? "var(--accent)" : "var(--border)",
-            color: snapshot.folding ? "#fff" : "var(--text-muted)",
-          }}
-        >
-          {snapshot.folding ? t("foldingOn", "Folding on") : t("foldingOff", "Folding off")}
-        </button>
-        <button
-          type="button"
-          onClick={() => void send({ action: "reset" })}
-          disabled={busy || stats.foldedCount === 0}
-          style={{ ...toggleStyle, opacity: stats.foldedCount === 0 ? 0.5 : 1 }}
-        >
-          {t("unfoldAll", "Unfold all")}
-        </button>
-        <span style={{ flex: 1 }} />
-        <span style={{ fontSize: 11, color: overBudget ? "#f59e0b" : "var(--text-dim)" }}>
-          {t("liveTokens", "context")} {stats.liveTokens.toLocaleString()} / {stats.fullTokens.toLocaleString()} tok
-          {stats.savedTokens > 0 ? ` · ${t("savedTokens", "saved")} ${stats.savedTokens.toLocaleString()}` : ""}
-          {stats.budget > 0 ? ` · ${t("budget", "budget")} ${stats.budget.toLocaleString()}` : ""}
-        </span>
-      </div>
+    <div style={splitStyle}>
+      <div style={{ display: "grid", gap: 12, minWidth: 0, alignContent: "start" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            onClick={() => void send({ action: "folding", enabled: !snapshot.folding })}
+            disabled={busy}
+            style={{
+              ...toggleStyle,
+              background: snapshot.folding ? "var(--accent)" : "transparent",
+              borderColor: snapshot.folding ? "var(--accent)" : "var(--border)",
+              color: snapshot.folding ? "#fff" : "var(--text-muted)",
+            }}
+          >
+            {snapshot.folding ? t("foldingOn", "Folding on") : t("foldingOff", "Folding off")}
+          </button>
+          <button
+            type="button"
+            onClick={() => void send({ action: "reset" })}
+            disabled={busy || stats.foldedCount === 0}
+            style={{ ...toggleStyle, opacity: stats.foldedCount === 0 ? 0.5 : 1 }}
+          >
+            {t("unfoldAll", "Unfold all")}
+          </button>
+          <span style={{ flex: 1 }} />
+          <span style={{ fontSize: 11, color: overBudget ? "#f59e0b" : "var(--text-dim)" }}>
+            {t("liveTokens", "context")} {stats.liveTokens.toLocaleString()} / {stats.fullTokens.toLocaleString()} tok
+            {stats.savedTokens > 0 ? ` · ${t("savedTokens", "saved")} ${stats.savedTokens.toLocaleString()}` : ""}
+            {stats.budget > 0 ? ` · ${t("budget", "budget")} ${stats.budget.toLocaleString()}` : ""}
+          </span>
+        </div>
 
-      <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-        <Metric label={t("blocks", "blocks")} value={String(stats.blockCount)} />
-        <Metric label={t("foldedBlocks", "folded")} value={String(stats.foldedCount)} />
-        <Metric
-          label={t("contextWindow", "window")}
-          value={stats.contextWindow ? `${Math.round((stats.liveTokens / stats.contextWindow) * 100)}%` : "—"}
-        />
-        <Metric label={t("protectedTail", "protected tail")} value={`${stats.protectTokens.toLocaleString()} tok`} />
-      </div>
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+          <Metric label={t("blocks", "blocks")} value={String(stats.blockCount)} />
+          <Metric label={t("foldedBlocks", "folded")} value={String(stats.foldedCount)} />
+          <Metric
+            label={t("contextWindow", "window")}
+            value={stats.contextWindow ? `${Math.round((stats.liveTokens / stats.contextWindow) * 100)}%` : "—"}
+          />
+          <Metric label={t("protectedTail", "protected tail")} value={`${stats.protectTokens.toLocaleString()} tok`} />
+        </div>
 
-      {tiles.length === 0 ? null : (
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(96px, 1fr))",
-            gridAutoRows: "64px",
-            gap: 5,
-          }}
-        >
-          {tiles.map((block) => {
-            const tone = KIND_TONES[block.kind] ?? KIND_TONES.text;
-            const active = selected?.id === block.id;
-            return (
-              <button
-                key={block.id}
-                type="button"
-                onClick={() => setSelected(block)}
-                title={`${block.label} · ${block.tokens} tok${block.folded ? ` · ${block.digest}` : ""}`}
-                style={{
-                  gridColumn: `span ${weightOf(block.fullTokens)}`,
-                  display: "flex",
-                  flexDirection: "column",
-                  justifyContent: "space-between",
-                  gap: 2,
-                  padding: "5px 7px",
-                  textAlign: "left",
-                  background: block.folded ? "rgba(100,116,139,0.10)" : tone.bg,
-                  border: `1px solid ${active ? "var(--accent)" : block.protectedBlock ? "rgba(245,158,11,0.45)" : tone.border}`,
-                  borderRadius: 7,
-                  color: block.folded ? "var(--text-dim)" : "var(--text)",
-                  cursor: "pointer",
-                  overflow: "hidden",
-                  opacity: block.folded ? 0.85 : 1,
-                  backgroundImage: block.folded
-                    ? "repeating-linear-gradient(135deg, rgba(255,255,255,0.05) 0 4px, transparent 4px 8px)"
-                    : undefined,
-                  outline: active ? "2px solid color-mix(in srgb, var(--accent) 45%, transparent)" : "none",
-                }}
-              >
-                <span
+        {tiles.length === 0 ? null : (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(96px, 1fr))",
+              gridAutoRows: "64px",
+              gap: 5,
+            }}
+          >
+            {tiles.map((block) => {
+              const tone = KIND_TONES[block.kind] ?? KIND_TONES.text;
+              const active = selected?.id === block.id;
+              return (
+                <button
+                  key={block.id}
+                  type="button"
+                  onClick={() => setSelected(block)}
+                  title={`${block.label} · ${block.tokens} tok${block.folded ? ` · ${block.digest}` : ""}`}
                   style={{
-                    fontSize: 10,
-                    lineHeight: 1.3,
+                    gridColumn: `span ${weightOf(block.fullTokens)}`,
+                    display: "flex",
+                    flexDirection: "column",
+                    justifyContent: "space-between",
+                    gap: 2,
+                    padding: "5px 7px",
+                    textAlign: "left",
+                    background: block.folded ? "rgba(100,116,139,0.10)" : tone.bg,
+                    border: `1px solid ${active ? "var(--accent)" : block.protectedBlock ? "rgba(245,158,11,0.45)" : tone.border}`,
+                    borderRadius: 7,
+                    color: block.folded ? "var(--text-dim)" : "var(--text)",
+                    cursor: "pointer",
                     overflow: "hidden",
-                    display: "-webkit-box",
-                    WebkitLineClamp: 3,
-                    WebkitBoxOrient: "vertical",
-                    wordBreak: "break-word",
+                    opacity: block.folded ? 0.85 : 1,
+                    backgroundImage: block.folded
+                      ? "repeating-linear-gradient(135deg, rgba(255,255,255,0.05) 0 4px, transparent 4px 8px)"
+                      : undefined,
+                    outline: active ? "2px solid color-mix(in srgb, var(--accent) 45%, transparent)" : "none",
                   }}
                 >
-                  {block.pinned ? "📌 " : ""}
-                  {block.label}
-                </span>
-                <span style={{ fontSize: 9, color: "var(--text-dim)", fontVariantNumeric: "tabular-nums" }}>
-                  {block.tokens} tok
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      )}
+                  <span
+                    style={{
+                      fontSize: 10,
+                      lineHeight: 1.3,
+                      overflow: "hidden",
+                      display: "-webkit-box",
+                      WebkitLineClamp: 3,
+                      WebkitBoxOrient: "vertical",
+                      wordBreak: "break-word",
+                    }}
+                  >
+                    {block.pinned ? "📌 " : ""}
+                    {block.label}
+                  </span>
+                  <span style={{ fontSize: 9, color: "var(--text-dim)", fontVariantNumeric: "tabular-nums" }}>
+                    {block.tokens} tok
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
 
-      {snapshot.truncated ? <Hint>{t("contextTruncated", "Showing the most recent blocks only.")}</Hint> : null}
+        {snapshot.truncated ? <Hint>{t("contextTruncated", "Showing the most recent blocks only.")}</Hint> : null}
 
-      {selected ? (
+        {error ? <Hint tone="error">{error}</Hint> : null}
+      </div>
+
+      <div style={contentColumnStyle}>
         <section style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
           <div
             style={{
@@ -209,13 +213,19 @@ export function ContextFoldMap({ sessionId, refreshKey = 0 }: ContextFoldMapProp
               flexWrap: "wrap",
             }}
           >
-            <span style={{ fontSize: 12, color: "var(--text)" }}>{selected.label}</span>
-            <span style={{ fontSize: 10, color: "var(--text-dim)" }}>
-              {selected.tokens} / {selected.fullTokens} tok
+            <span style={{ fontSize: 12, color: "var(--text)" }}>
+              {selected ? selected.label : t("blockPicker", "Pick a block")}
             </span>
-            {selected.folded ? <span style={{ fontSize: 10, color: "var(--text-dim)" }}>{selected.digest}</span> : null}
+            {selected ? (
+              <span style={{ fontSize: 10, color: "var(--text-dim)" }}>
+                {selected.tokens} / {selected.fullTokens} tok
+              </span>
+            ) : null}
+            {selected?.folded ? (
+              <span style={{ fontSize: 10, color: "var(--text-dim)" }}>{selected.digest}</span>
+            ) : null}
             <span style={{ flex: 1 }} />
-            {selected.folded ? (
+            {!selected ? null : selected.folded ? (
               <button
                 type="button"
                 onClick={() => void send({ action: "unfold", ids: [selected.id] })}
@@ -234,19 +244,23 @@ export function ContextFoldMap({ sessionId, refreshKey = 0 }: ContextFoldMapProp
                 {t("foldBlock", "Fold")}
               </button>
             )}
-            <button
-              type="button"
-              onClick={() => void send({ action: selected.pinned ? "unpin" : "pin", ids: [selected.id] })}
-              style={actionStyle}
-            >
-              {selected.pinned ? t("unpinBlock", "Unpin") : t("pinBlock", "Pin")}
-            </button>
+            {selected ? (
+              <button
+                type="button"
+                onClick={() => void send({ action: selected.pinned ? "unpin" : "pin", ids: [selected.id] })}
+                style={actionStyle}
+              >
+                {selected.pinned ? t("unpinBlock", "Unpin") : t("pinBlock", "Pin")}
+              </button>
+            ) : null}
           </div>
-          <pre style={previewStyle}>{selected.preview || "—"}</pre>
+          <pre style={previewStyle}>
+            {selected
+              ? selected.preview || "—"
+              : t("blockPickerHint", "Every block of the context window is a tile. Pick one to read it here.")}
+          </pre>
         </section>
-      ) : null}
-
-      {error ? <Hint tone="error">{error}</Hint> : null}
+      </div>
     </div>
   );
 }
@@ -283,6 +297,19 @@ function weightOf(tokens: number): number {
   if (tokens > 800) return 2;
   return 1;
 }
+
+const splitStyle = {
+  display: "grid",
+  gridTemplateColumns: "minmax(0, 1fr) minmax(260px, 380px)",
+  gap: 14,
+  alignItems: "start",
+} as const;
+
+const contentColumnStyle = {
+  position: "sticky",
+  top: 0,
+  minWidth: 0,
+} as const;
 
 const toggleStyle = {
   padding: "5px 12px",

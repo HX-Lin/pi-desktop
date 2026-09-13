@@ -513,6 +513,8 @@ const zhCN: Record<string, string> = {
   cannotFold: "这一块不能折叠",
   unpinBlock: "取消固定",
   pinBlock: "固定",
+  blockPicker: "选一个块",
+  blockPickerHint: "上下文里的每一块都是一张贴片，点一张即可在这里查看内容。",
   inContext: "在上下文里",
   notInContext: "不在上下文",
   live: "运行中",

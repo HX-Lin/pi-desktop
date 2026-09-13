@@ -112,7 +112,7 @@ export function MemoryMapPanel({ sessionId, onClose, contextRefreshKey = 0 }: Me
           </button>
         </header>
 
-        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "14px 16px 18px" }}>
+        <div style={bodyStyle}>
           {loading && <Hint>{t("loading", "Loading…")}</Hint>}
           {error && <Hint tone="error">{error}</Hint>}
 
@@ -123,11 +123,15 @@ export function MemoryMapPanel({ sessionId, onClose, contextRefreshKey = 0 }: Me
           )}
 
           {tab === "memory" && overview?.exists && (
-            <>
-              <Tally tiles={tiles} overview={overview} />
-              <TileGrid tiles={tiles} selected={selected} onSelect={setSelected} />
-              <Inspector tile={selected} />
-            </>
+            <div style={splitStyle}>
+              <div style={{ ...columnStyle, display: "grid", gap: 10, alignContent: "start" }}>
+                <Tally tiles={tiles} overview={overview} />
+                <TileGrid tiles={tiles} selected={selected} onSelect={setSelected} />
+              </div>
+              <div style={contentColumnStyle}>
+                <Inspector tile={selected} />
+              </div>
+            </div>
           )}
 
           {tab === "context" && <ContextFoldMap sessionId={sessionId} refreshKey={contextRefreshKey} />}
@@ -440,28 +444,51 @@ function Hint({ children, tone }: { children: React.ReactNode; tone?: "error" })
   );
 }
 
+/**
+ * Docked to the right edge, full height: the map is a side panel, not a popup —
+ * nothing has to be scrolled into view to be read.
+ */
 const overlayStyle = {
   position: "absolute",
   inset: 0,
   zIndex: 90,
   display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  padding: 20,
-  background: "rgba(0,0,0,0.18)",
+  justifyContent: "flex-end",
+  background: "rgba(0,0,0,0.14)",
 } as const;
 
 const dialogStyle = {
-  width: "100%",
-  maxWidth: 780,
-  maxHeight: "82vh",
+  width: "min(1020px, 96%)",
+  height: "100%",
   display: "flex",
   flexDirection: "column",
   background: "var(--bg-panel)",
-  border: "1px solid var(--border)",
-  borderRadius: 10,
-  boxShadow: "0 18px 48px rgba(0,0,0,0.22)",
+  borderLeft: "1px solid var(--border)",
+  boxShadow: "-14px 0 40px rgba(0,0,0,0.18)",
   overflow: "hidden",
+} as const;
+
+const bodyStyle = {
+  flex: 1,
+  minHeight: 0,
+  overflowY: "auto",
+  padding: "14px 16px 18px",
+} as const;
+
+/** Picker on the left, inspected content on the right, scrolling independently. */
+const splitStyle = {
+  display: "grid",
+  gridTemplateColumns: "minmax(0, 1fr) minmax(280px, 420px)",
+  gap: 14,
+  alignItems: "start",
+} as const;
+
+const columnStyle = { minWidth: 0 } as const;
+
+const contentColumnStyle = {
+  position: "sticky",
+  top: 0,
+  minWidth: 0,
 } as const;
 
 const headerStyle = {
