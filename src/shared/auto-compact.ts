@@ -41,11 +41,11 @@ export const AUTO_COMPACT_SETTINGS_DEFAULTS: AutoCompactSettings = {
 export const AUTO_COMPACT_HINT_TURNS = 30;
 
 /**
- * Context fill level that triggers a memory compaction on its own.
+ * Context fill level that triggers an automatic *context* compaction.
  *
- * Memory compaction is the operation that also relieves the context window (the
- * context part is only one piece of it), so filling the window must start it
- * rather than just dropping a summary into the session.
+ * This is deliberately not the memory threshold: pi's own summarization frees
+ * room for the model and leaves every message on disk, while deleting the
+ * digested history is reserved for "压缩为记忆" at the user's turn threshold.
  */
 export const AUTO_COMPACT_CONTEXT_PERCENT = 75;
 

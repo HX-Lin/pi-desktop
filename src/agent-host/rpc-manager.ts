@@ -450,7 +450,7 @@ export class AgentSessionWrapper {
           // After every completed turn, consider compacting by message count.
           // Scheduled outside this promise so the compaction turn can enqueue
           // behind turnTail instead of waiting on itself.
-          this.scheduleAutoCompactByMessageCount();
+          this.scheduleAutoCompactCheck();
         }
       });
     this.turnTail = run.then(
@@ -462,12 +462,12 @@ export class AgentSessionWrapper {
 
   /** Apply a changed compaction threshold without waiting for the next turn. */
   recheckAutoCompaction(): void {
-    this.scheduleAutoCompactByMessageCount();
+    this.scheduleAutoCompactCheck();
   }
 
-  private scheduleAutoCompactByMessageCount(): void {
+  private scheduleAutoCompactCheck(): void {
     if (!this._alive) return;
-    setImmediate(() => void this.maybeAutoCompactByMessageCount());
+    setImmediate(() => void this.maybeAutoCompact());
   }
 
   /**
@@ -497,15 +497,20 @@ export class AgentSessionWrapper {
   }
 
   /**
-   * Compact automatically once the chat reaches the message threshold.
+   * Automatic compaction, with the two operations kept apart.
    *
-   * Only runs when the session is fully idle, so a queued or streaming turn
-   * never gets compacted mid-flight; that turn schedules its own check when it
-   * finishes. A compaction that cannot reduce context (session too small after
-   * token-based cut points) raises the floor so the next attempt waits for
-   * meaningful growth instead of retrying every turn.
+   * Reaching the turn threshold is a **memory** compaction: distil, sediment
+   * scripts, archive and prune the digested history. A context window that is
+   * merely filling up is a **context** compaction: pi's own summarization, which
+   * frees room for the model and leaves every message on disk. Deletion only ever
+   * follows the memory threshold the user controls.
+   *
+   * Only runs when the session is fully idle, so a queued or streaming turn never
+   * gets compacted mid-flight; that turn schedules its own check when it finishes.
+   * A compaction that cannot reduce the context raises the floor so the next
+   * attempt waits for meaningful growth instead of retrying every turn.
    */
-  private async maybeAutoCompactByMessageCount(): Promise<void> {
+  private async maybeAutoCompact(): Promise<void> {
     if (!this._alive || this.autoCompactInFlight) return;
     if (this.queuedTurnCount > 0 || this.promptRunning || this.inner.isStreaming || this.inner.isCompacting) return;
     // Honour the user's pi auto-compaction switch as the master toggle.
@@ -516,29 +521,31 @@ export class AgentSessionWrapper {
     const turns = countBranchConversationTurns(this.inner.sessionManager.getBranch());
     const { autoCompactTurns } = readHostSettings();
     const percent = this.inner.getContextUsage()?.percent ?? 0;
-    // Two ways in, both running the full memory compaction: enough turns, or a
-    // context window that is filling up (the context part is only one piece of
-    // compacting to memory, so filling the window starts the whole thing).
     const overTurns = turns >= autoCompactTurns && turns >= this.autoCompactSkipUntilCount;
     const overPercent = percent >= AUTO_COMPACT_CONTEXT_PERCENT && percent >= this.autoCompactSkipUntilPercent;
     if (!overTurns && !overPercent) return;
-    const reason = overTurns ? `已达到 ${turns} 条对话` : `上下文已占用 ${Math.round(percent)}%`;
 
     this.autoCompactInFlight = true;
     try {
-      await this.enqueueTurn(async () => {
-        await this.compactToMemory(`自动触发：${reason}。`);
-      });
-      const after = countBranchConversationTurns(this.inner.sessionManager.getBranch());
-      const afterPercent = this.inner.getContextUsage()?.percent ?? 0;
-      // Nothing was removed — wait for meaningful growth before retrying.
-      this.rescheduleAfterAutoCompact(after, afterPercent, after < turns);
+      if (overTurns) {
+        await this.enqueueTurn(async () => {
+          await this.compactToMemory(`自动触发：已达到 ${turns} 条对话。`);
+        });
+        const after = countBranchConversationTurns(this.inner.sessionManager.getBranch());
+        const afterPercent = this.inner.getContextUsage()?.percent ?? 0;
+        // Nothing was removed — wait for meaningful growth before retrying.
+        this.rescheduleAfterAutoCompact(after, afterPercent, after < turns);
+      } else {
+        // Context only: pi's own prompt, no distillation, no history prune.
+        await this.enqueueTurn(async () => {
+          await this.inner.compact(undefined);
+        });
+        const afterPercent = this.inner.getContextUsage()?.percent ?? 0;
+        this.rescheduleAfterAutoCompact(turns, afterPercent, afterPercent < percent - 1);
+      }
     } catch (error) {
       this.rescheduleAfterAutoCompact(turns, percent, false);
-      console.error(
-        "[pi-desktop] automatic message-count compaction failed:",
-        error instanceof Error ? error.message : error,
-      );
+      console.error("[pi-desktop] automatic compaction failed:", error instanceof Error ? error.message : error);
     } finally {
       this.autoCompactInFlight = false;
     }

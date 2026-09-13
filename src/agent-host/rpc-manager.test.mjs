@@ -203,23 +203,54 @@ test("the persisted threshold setting decides when to compact", async () => {
   }
 });
 
-test("a filling context window starts a memory compaction by itself", async () => {
+test("a filling context window compacts the context without deleting history", async () => {
   const { AgentSessionWrapper } = await loadRpcManager();
-  // Far below the turn threshold, but the window is nearly full: compacting to
-  // memory is what relieves it, so that is what must run.
+  // A real session file, so "did anything get deleted?" is a byte-level question.
+  const dir = mkdtempSync(path.join(tmpdir(), "pi-context-compact-"));
+  const filePath = path.join(dir, "session.jsonl");
+  const history = Array.from({ length: 40 }, (_, index) => ({
+    type: "message",
+    id: `m${index + 1}`,
+    parentId: index === 0 ? null : `m${index}`,
+    message: { role: "user", content: `turn ${index + 1} ${"x".repeat(2048)}` },
+  }));
+  writeFileSync(
+    filePath,
+    `${[
+      { type: "session", version: 3, id: "session-window", timestamp: new Date().toISOString(), cwd: dir },
+      ...history,
+      {
+        type: "compaction",
+        id: "c1",
+        parentId: "m40",
+        summary: `## Goal\n${"memory line\n".repeat(40)}`,
+        firstKeptEntryId: "m38",
+        tokensBefore: 10,
+      },
+    ]
+      .map((entry) => JSON.stringify(entry))
+      .join("\n")}\n`,
+    "utf8",
+  );
+  const before = readFileSync(filePath, "utf8");
+
+  // Far below the turn threshold, but the window is nearly full.
   const { inner, state } = createFakeSession({
     branch: conversationTurns(2),
+    sessionFile: filePath,
     contextUsage: { percent: 82, contextWindow: 200_000, tokens: 164_000 },
   });
   const wrapper = new AgentSessionWrapper(inner);
   try {
     await wrapper.runExternalTurn({ runId: "run-window", message: "hello", channel: "telegram" });
     await waitFor(() => state.compactCalls === 1);
-    const instructions = String(state.compactInstructions[0]);
-    assert.match(instructions, /压缩为记忆/);
-    assert.match(instructions, /上下文已占用 82%/);
+    // pi's own summarization prompt: no distillation instructions attached...
+    assert.equal(state.compactInstructions[0], null);
+    // ...and the session file is untouched: a filling window never prunes history.
+    assert.equal(readFileSync(filePath, "utf8"), before);
   } finally {
     wrapper.destroy();
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 

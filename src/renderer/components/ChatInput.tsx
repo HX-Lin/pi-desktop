@@ -976,10 +976,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
   const compactBarText =
     conversationTurns >= compactThreshold
       ? t("compactAutoRunning", "{count} conversations pending — compacting to memory now")
-      : t(
-          "compactAutoHint",
-          "{count} conversations pending — compacts to memory at {threshold} or when the context fills",
-        );
+      : t("compactAutoHint", "{count} conversations pending — compacts to memory at {threshold}");
   const compactBarLabel = compactBarText
     .replace("{count}", String(conversationTurns))
     .replace("{threshold}", String(compactThreshold))
