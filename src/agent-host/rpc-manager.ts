@@ -33,8 +33,8 @@ import {
   countBranchConversationTurns,
 } from "../shared/auto-compact";
 import { readHostSettings } from "./host-settings";
-import { MEMORY_DISTILLATION_PROMPT, sedimentMemoryScripts } from "./memory-prompt";
-import { syncSessionMemory } from "./memory-store";
+import { MEMORY_DISTILLATION_PROMPT } from "./memory-prompt";
+import { planMemoryCompaction, type MemoryCompactionPlan } from "./memory-compaction";
 import { pruneSummarizedEntries, readSessionFileEntries, writeSessionFileEntries } from "./session-prune";
 
 export { countBranchConversationMessages };
@@ -534,12 +534,13 @@ export class AgentSessionWrapper {
   }
 
   /**
-   * Rewrite the session file so it only holds what the model still sees.
+   * Run the local half of a memory compaction over the session file.
    *
-   * pi keeps summarized turns on disk forever, so without this the file (and
-   * the message counts in the UI) grows without bound even though the context
-   * stays small. The memory entry is mirrored into the per-session memory files
-   * first, so a capped memory survives the rewrite.
+   * pi keeps summarized turns on disk forever, so without this the file (and the
+   * message counts in the UI) grows without bound even though the context stays
+   * small. `planMemoryCompaction` owns the pipeline — ground-truth facts, script
+   * sediment, cold archive, memory tiering and the delete gate — and tells us
+   * whether the destructive rewrite is allowed.
    */
   private pruneSummarizedHistory(): void {
     const manager = this.inner.sessionManager;
@@ -550,16 +551,34 @@ export class AgentSessionWrapper {
       if (!header) return;
       const sessionId = typeof manager.getSessionId === "function" ? manager.getSessionId() : String(header.id ?? "");
       if (!sessionId) return;
-      const { entries: kept } = pruneSummarizedEntries(
-        entries,
-        (memory) => syncSessionMemory(sessionId, sedimentMemoryScripts(sessionId, memory)).primary,
-      );
-      // Also rewritten when nothing was dropped: the retained memory entry gets
-      // marked as a memory compaction even then.
+
+      let planned: MemoryCompactionPlan | undefined;
+      const { entries: kept } = pruneSummarizedEntries(entries, (memory, context) => {
+        planned = planMemoryCompaction({
+          sessionId,
+          memory,
+          dropped: context.dropped,
+          reason: "memory-compaction",
+        });
+        return planned.memory;
+      });
+
+      const outcome = planned;
+      if (!outcome) return;
+      if (!outcome.prune) {
+        // The memory file is already up to date; history stays where it is.
+        console.log(
+          `[pi-desktop] kept summarized history (${outcome.skipReason}): span=${outcome.spanBytes}B entries=${entries.length}`,
+        );
+        return;
+      }
       if (kept === entries) return;
       writeSessionFileEntries(filePath, header, kept);
       manager.setSessionFile(filePath);
       reloadAgentMessagesFromSession(this.inner);
+      console.log(
+        `[pi-desktop] memory compaction archived ${outcome.archived?.entries ?? 0} entries to ${outcome.archived?.path ?? "?"}`,
+      );
     } catch (error) {
       console.error("[pi-desktop] session pruning failed:", error instanceof Error ? error.message : error);
     }

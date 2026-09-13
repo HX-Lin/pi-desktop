@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -244,17 +244,25 @@ test("a memory compaction loads the rewritten memory back into the session", asy
   const { AgentSessionWrapper } = await loadRpcManager();
   const dir = mkdtempSync(path.join(tmpdir(), "pi-compact-load-"));
   const filePath = path.join(dir, "session.jsonl");
+  // The span that leaves the context has to be worth removing (see
+  // MEMORY_PRUNE_MIN_BYTES), so the fixture holds a realistic amount of history.
+  const history = Array.from({ length: 80 }, (_, index) => ({
+    type: "message",
+    id: `m${index + 1}`,
+    parentId: index === 0 ? null : `m${index}`,
+    message: { role: "user", content: `turn ${index + 1} ${"x".repeat(1024)}` },
+  }));
   writeFileSync(
     filePath,
     `${[
       { type: "session", version: 3, id: "session-load", timestamp: new Date().toISOString(), cwd: dir },
-      { type: "message", id: "u1", parentId: null, message: { role: "user", content: "old" } },
+      ...history,
       {
         type: "compaction",
         id: "c1",
-        parentId: "u1",
-        summary: "## Goal\nlong memory",
-        firstKeptEntryId: "u1",
+        parentId: "m80",
+        summary: `## Goal\n${"memory line\n".repeat(40)}`,
+        firstKeptEntryId: "m78",
         tokensBefore: 10,
       },
     ]
@@ -284,4 +292,37 @@ test("a memory compaction loads the rewritten memory back into the session", asy
   wrapper.destroy();
   rmSync(dir, { recursive: true, force: true });
   assert.equal(state.compactCalls, 2);
+});
+
+test("a memory compaction leaves tiny spans in place", async () => {
+  const { AgentSessionWrapper } = await loadRpcManager();
+  const dir = mkdtempSync(path.join(tmpdir(), "pi-compact-small-"));
+  const filePath = path.join(dir, "session.jsonl");
+  const entries = [
+    { type: "session", version: 3, id: "session-small", timestamp: new Date().toISOString(), cwd: dir },
+    { type: "message", id: "u1", parentId: null, message: { role: "user", content: "tiny" } },
+    {
+      type: "compaction",
+      id: "c1",
+      parentId: "u1",
+      summary: `## Goal\n${"memory line\n".repeat(40)}`,
+      firstKeptEntryId: "u1",
+      tokensBefore: 10,
+    },
+  ];
+  writeFileSync(filePath, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`, "utf8");
+  const before = readFileSync(filePath, "utf8");
+
+  const reloadedMessages = [{ role: "user", content: "should not be reloaded" }];
+  const { inner } = createFakeSession({ branch: [], sessionFile: filePath, contextMessages: reloadedMessages });
+  const wrapper = new AgentSessionWrapper(inner);
+  await wrapper.send({ type: "compact", mode: "memory" });
+
+  // Nothing was deleted and the live context was left alone: the memory file is
+  // still updated, but the session keeps its history.
+  assert.equal(readFileSync(filePath, "utf8"), before);
+  assert.notDeepEqual(inner.agent.state.messages, reloadedMessages);
+
+  wrapper.destroy();
+  rmSync(dir, { recursive: true, force: true });
 });

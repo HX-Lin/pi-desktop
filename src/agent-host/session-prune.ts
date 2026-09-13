@@ -29,6 +29,19 @@ export interface PrunableEntry {
 
 export interface PruneResult {
   entries: PrunableEntry[];
+  /** How many entries leave the session file (= `dropped.length`). */
+  removed: number;
+  /**
+   * The entries that leave the session file, in their original order. Includes
+   * older compaction entries: they are superseded by the new memory, so they are
+   * kept in the cold archive as memory history.
+   */
+  dropped: PrunableEntry[];
+}
+
+/** Passed to `updateMemory` so it can act on what is about to be removed. */
+export interface PruneContext {
+  dropped: PrunableEntry[];
   removed: number;
 }
 
@@ -40,7 +53,7 @@ export interface PruneResult {
  */
 export function pruneSummarizedEntries(
   entries: PrunableEntry[],
-  updateMemory?: (memory: string) => string,
+  updateMemory?: (memory: string, context: PruneContext) => string,
 ): PruneResult {
   let compactionIndex = -1;
   for (let index = entries.length - 1; index >= 0; index -= 1) {
@@ -49,15 +62,20 @@ export function pruneSummarizedEntries(
       break;
     }
   }
-  if (compactionIndex < 0) return { entries, removed: 0 };
+  if (compactionIndex < 0) return { entries, removed: 0, dropped: [] };
 
   const compaction = entries[compactionIndex];
   const firstKeptId = compaction.firstKeptEntryId;
   const firstKeptIndex = typeof firstKeptId === "string" ? entries.findIndex((entry) => entry.id === firstKeptId) : -1;
   const tailStart = firstKeptIndex >= 0 && firstKeptIndex <= compactionIndex ? firstKeptIndex : compactionIndex + 1;
 
+  // Everything before `tailStart` leaves the file: older compactions and the
+  // turns they covered. Reported to the caller so it can archive them first.
+  const dropped = entries.slice(0, tailStart);
+  const removed = dropped.length;
+
   let memory = typeof compaction.summary === "string" ? compaction.summary : "";
-  if (updateMemory && memory) memory = updateMemory(memory);
+  if (updateMemory && memory) memory = updateMemory(memory, { dropped, removed });
   const details =
     typeof compaction.details === "object" && compaction.details !== null
       ? (compaction.details as Record<string, unknown>)
@@ -77,7 +95,7 @@ export function pruneSummarizedEntries(
     rechained.push({ ...entry, parentId });
     parentId = typeof entry.id === "string" ? entry.id : parentId;
   }
-  return { entries: rechained, removed: entries.length - kept.length };
+  return { entries: rechained, removed: dropped.length, dropped };
 }
 
 /** Read a session file, split into its header and its entries. */

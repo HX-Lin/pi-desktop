@@ -18,6 +18,16 @@
  * the context — only a one-line index (name + description) is injected into the
  * system prompt, so the model knows what each script does and can run it
  * directly. See `memory-scripts-extension.ts`.
+ *
+ * Layout per session:
+ *
+ *   primary.md      memory that stays in context (3 MB cap)
+ *   secondary.md    memory that sank out of the primary (30 MB cap)
+ *   scripts/        executable procedures, uncapped, never in context
+ *   archive/        raw conversation removed by a memory compaction, as JSONL
+ *
+ * Everything that is not in the context is announced to the model instead of
+ * being silently lost — see `memoryArchiveNotice`.
  */
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
@@ -35,6 +45,9 @@ import {
 import { join } from "node:path";
 
 export const MEMORY_SCRIPTS_DIRNAME = "scripts";
+export const MEMORY_ARCHIVE_DIRNAME = "archive";
+/** Upper bound for the raw-conversation archive; oldest files go first. */
+export const MEMORY_ARCHIVE_MAX_BYTES = 256 * 1024 * 1024;
 /** Script names must be plain file names: no separators, no leading dot. */
 export const MEMORY_SCRIPT_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const MEMORY_SCRIPT_HEAD_BYTES = 4096;
@@ -70,6 +83,45 @@ export function secondaryMemoryPath(sessionId: string): string {
 /** Directory holding the session's executable memory scripts. */
 export function memoryScriptsDir(sessionId: string): string {
   return join(memoryDir(sessionId), MEMORY_SCRIPTS_DIRNAME);
+}
+
+/** Directory holding raw conversation that a memory compaction removed. */
+export function memoryArchiveDir(sessionId: string): string {
+  return join(memoryDir(sessionId), MEMORY_ARCHIVE_DIRNAME);
+}
+
+export interface MemoryArchiveSummary {
+  dir: string;
+  files: number;
+  bytes: number;
+  /** `YYYY-MM-DD` of the oldest and newest archive file. */
+  oldest?: string;
+  newest?: string;
+}
+
+/** Summarize the session's raw-conversation archive (never reads file bodies). */
+export function listMemoryArchives(sessionId: string): MemoryArchiveSummary {
+  const dir = memoryArchiveDir(sessionId);
+  const summary: MemoryArchiveSummary = { dir, files: 0, bytes: 0 };
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter((name) => name.endsWith(".jsonl"));
+  } catch {
+    return summary;
+  }
+  if (names.length === 0) return summary;
+  names.sort();
+  for (const name of names) {
+    try {
+      summary.bytes += statSync(join(dir, name)).size;
+    } catch {
+      // Raced with the retention sweep — skip the file.
+    }
+  }
+  summary.files = names.length;
+  summary.oldest = names[0].slice(0, 10);
+  summary.newest = names[names.length - 1].slice(0, 10);
+  return summary;
 }
 
 /** A script the model may run directly instead of recalling how to do the job. */
@@ -132,28 +184,60 @@ export function writeMemoryScript(sessionId: string, name: string, content: stri
 }
 
 /**
- * Point the model at the archived memory, if any has sunk out of the context.
+ * Point the model at everything that left the context.
  *
- * Retired memory is only on disk; without this the model would never know it
- * exists. Returns null while everything still fits in the active memory.
+ * Active memory needs no announcement: it lives in the session as the compaction
+ * entry the model already reads. Retired memory and the raw conversations dropped
+ * by a memory compaction are only on disk, so without this the model would never
+ * know they exist. Returns null while nothing has been retired yet.
  */
 export function memoryArchiveNotice(sessionId: string): string | null {
-  const path = secondaryMemoryPath(sessionId);
-  let bytes = 0;
-  try {
-    bytes = statSync(path).size;
-  } catch {
-    return null;
+  const lines: string[] = [];
+
+  const secondary = secondaryMemoryPath(sessionId);
+  const secondaryBytes = fileSize(secondary);
+  if (secondaryBytes > 0) {
+    lines.push(`- 已下沉的记忆：\`${secondary}\`（${formatBytes(secondaryBytes)}）`);
   }
-  if (bytes <= 0) return null;
+
+  const archives = listMemoryArchives(sessionId);
+  if (archives.files > 0) {
+    const range = archives.oldest === archives.newest ? archives.oldest : `${archives.oldest} ~ ${archives.newest}`;
+    lines.push(
+      `- 已删除的原始对话：\`${archives.dir}\`（${archives.files} 个文件，共 ${formatBytes(archives.bytes)}，${range}）`,
+    );
+  }
+
+  if (lines.length === 0) return null;
   return [
-    "## 记忆归档（已下沉，不在你的上下文里）",
+    "## 记忆归档（不在你的上下文里，需要时自己检索）",
     "",
-    `归档文件：\`${path}\`（${formatBytes(bytes)}）`,
+    ...lines,
     "",
-    "需要更早的记忆时自己检索，不要整篇读入：",
-    "`rg -n \"关键词\" <归档文件>` 或 `sed -n '1,120p' <归档文件>`",
+    "检索：`rg -n \"关键词\" <路径>`；列小节：`rg -n '^## ' <文件>`；不要整篇读入。",
   ].join("\n");
+}
+
+function fileSize(path: string): number {
+  try {
+    return statSync(path).size;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Remove a `## heading` section from a memory text, up to the next `## `.
+ *
+ * Memory texts are rewritten in place: sections this app owns (sedimented
+ * scripts, extracted facts) are replaced rather than appended to, so a summary
+ * pi reuses from the previous compaction cannot stack duplicates.
+ */
+export function stripMarkdownSection(text: string, heading: string): string {
+  const start = text.indexOf(`\n${heading}`);
+  if (start < 0) return text;
+  const end = text.indexOf("\n## ", start + 1);
+  return end < 0 ? text.slice(0, start) : `${text.slice(0, start)}${text.slice(end)}`;
 }
 
 function formatBytes(bytes: number): string {

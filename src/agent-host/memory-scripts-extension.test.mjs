@@ -101,3 +101,22 @@ test("the archived memory is pointed at once it exists", async () => {
   assert.ok(result.systemPrompt.includes("记忆归档"));
   assert.ok(result.systemPrompt.includes(path.join(fixtureRoot, "memory", sessionId, "secondary.md")));
 });
+
+test("archived raw conversation is announced so the model can search it", async () => {
+  const handlers = captureHandlers();
+  const sessionId = "session-archived-conversation";
+  const archiveDir = path.join(fixtureRoot, "memory", sessionId, "archive");
+  mkdirSync(archiveDir, { recursive: true });
+  for (const name of ["2026-08-01T00-00-00-000Z.jsonl", "2026-09-01T00-00-00-000Z.jsonl"]) {
+    writeFileSync(path.join(archiveDir, name), '{"type":"message"}\n', "utf8");
+  }
+
+  const result = await handlers.before_agent_start(
+    { prompt: "hi", systemPrompt: "BASE" },
+    { sessionManager: { getSessionId: () => sessionId } },
+  );
+
+  assert.ok(result.systemPrompt.includes("2 个文件"));
+  assert.ok(result.systemPrompt.includes("2026-08-01 ~ 2026-09-01"));
+  assert.ok(result.systemPrompt.includes(archiveDir));
+});

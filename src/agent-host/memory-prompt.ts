@@ -15,7 +15,7 @@
  * Only this path (`compactToMemory`) uses them. Compactions triggered by pi on
  * its own token threshold stay plain "压缩上下文".
  */
-import { writeMemoryScript } from "./memory-store";
+import { stripMarkdownSection, writeMemoryScript } from "./memory-store";
 
 /** ```` ```script:name.sh ```` fences the model uses to hand back a script. */
 const SCRIPT_BLOCK_PATTERN = /```script:([^\s`]{1,80})\r?\n([\s\S]*?)```/g;
@@ -24,6 +24,11 @@ const SEDIMENTED_HEADING = "## 已沉淀的记忆脚本";
 export const MEMORY_DISTILLATION_PROMPT = `这是一次「压缩为记忆」，不是普通的上下文压缩。
 
 上面的章节格式仍然要遵守，但内容要求更高：不要只写"现在做到哪了"，要写成以后（甚至换个会话）也能直接用上的长期记忆。
+
+跨次压缩的规则：
+- 未决事项（阻塞、未解决的报错、待验证的猜测）要原样带过来；只有在这段对话里出现了明确的解决证据（工具结果、用户确认）才允许标为已解决，不许因为换了说法就认为已解决
+- 重复的结论合并成一条；被新信息推翻的旧结论直接替换，不要同时保留两种说法
+- 已经在上一份记忆里、这段对话没有变化的内容，保持原样，不要重写
 
 必须写进对应章节的内容：
 - 用户目标与验收标准；用户的原话关键句能引就引
@@ -51,6 +56,7 @@ npm run dist
 - 脚本里必须有一行 \`# description: 用途\`，一句话说清干什么
 - 写完整、可直接执行的命令，不要占位符、不要省略号
 - 已经存在于「已沉淀的记忆脚本」且本次没有变化的脚本，不要重复输出
+- 「已沉淀区间的事实」是系统自动抽取的客观事实，你不需要重复罗列它们
 - 没有值得沉淀的脚本，就完全不要写这一节
 
 脚本会被保存到本会话的记忆脚本目录，之后可以直接执行，正文也不占记忆篇幅——所以不要为了省字而缩写命令。`;
@@ -99,8 +105,5 @@ function normalizeScript(content: string): string {
 }
 
 function stripSedimentedSection(text: string): string {
-  const start = text.indexOf(`\n${SEDIMENTED_HEADING}`);
-  if (start < 0) return text;
-  const end = text.indexOf("\n## ", start + 1);
-  return end < 0 ? text.slice(0, start) : `${text.slice(0, start)}${text.slice(end)}`;
+  return stripMarkdownSection(text, SEDIMENTED_HEADING);
 }
