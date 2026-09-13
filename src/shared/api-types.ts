@@ -23,15 +23,45 @@ export interface SkillUpdateParams {
   content?: string;
 }
 
+/** One live Accordion context map (the pi extension registers itself on disk). */
+export interface AccordionSessionStatus {
+  sessionId: string;
+  port: number;
+  /** Map URL; the first visit still needs the token link printed by /accordion. */
+  url: string;
+  cwd?: string;
+  title?: string;
+  model?: string;
+  tokens?: number;
+  contextWindow?: number;
+  startedAt?: number;
+  heartbeatAt: number;
+  /** False once the heartbeat goes stale (the session ended or crashed). */
+  live: boolean;
+}
+
+export interface AccordionStatus {
+  running: boolean;
+  sessions: AccordionSessionStatus[];
+}
+
+/** One `## section` of a memory text, sized so the UI can draw it as a tile. */
+export interface MemorySectionOverview {
+  title: string;
+  bytes: number;
+  preview: string;
+}
+
 /** Read-only view of one on-disk memory text (primary or archived). */
 export interface MemoryTextOverview {
   path: string;
   bytes: number;
   /** mtime in ms, when the file is readable. */
   updatedAt?: number;
-  /** `## ` headings found in the scanned slice. */
-  sections: string[];
-  preview: string;
+  /** `## ` sections found in the scanned slice, in file order. */
+  sections: MemorySectionOverview[];
+  /** Bytes held by sections outside the scanned slice, if any. */
+  uncoveredBytes: number;
   /** True when only the newest part of a large file was scanned. */
   tailOnly: boolean;
 }

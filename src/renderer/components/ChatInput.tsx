@@ -1333,7 +1333,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
               <button
                 type="button"
                 onClick={onShowMemory}
-                title={t("memoryOverview", "Memory overview")}
+                title={t("memoryOverview", "Memory map")}
                 style={{
                   flexShrink: 0,
                   padding: "3px 10px",
@@ -1353,7 +1353,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                   e.currentTarget.style.color = "var(--text-muted)";
                 }}
               >
-                {t("memoryOverview", "Memory overview")}
+                {t("memoryOverview", "Memory map")}
               </button>
             )}
             <button

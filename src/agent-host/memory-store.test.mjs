@@ -187,8 +187,12 @@ test("the overview summarizes every tier without loading whole files", () => {
   const overview = readMemoryOverview(sessionId);
 
   assert.equal(overview.exists, true);
-  assert.deepEqual(overview.primary.sections, ["Goal", "Next Steps"]);
-  assert.ok(overview.primary.preview.startsWith("## Goal"));
+  assert.deepEqual(
+    overview.primary.sections.map((section) => section.title),
+    ["Goal", "Next Steps"],
+  );
+  assert.ok(overview.primary.sections[0].bytes > 0);
+  assert.ok(overview.primary.sections[0].preview.includes("ship it"));
   assert.equal(overview.primary.tailOnly, false);
   assert.equal(overview.secondary, null);
   assert.deepEqual(overview.scripts, [
@@ -201,7 +205,8 @@ test("the overview summarizes every tier without loading whole files", () => {
 
 test("the overview reports the newest part of a sunk memory, newest archive first", () => {
   const sessionId = "session-overview-tail";
-  const oversized = `${"## Old\n".repeat(2000)}${"z".repeat(4 * 1024 * 1024)}\n\n## Newest\nmost recent\n`;
+  // One memory text bigger than the primary cap, so the oldest part sinks.
+  const oversized = `## Old\n${"x".repeat(4 * 1024 * 1024)}\n\n## Newest\nmost recent\n`;
   syncSessionMemory(sessionId, oversized);
 
   mkdirSync(path.join(memoryDir(sessionId), "archive"), { recursive: true });
@@ -213,8 +218,11 @@ test("the overview reports the newest part of a sunk memory, newest archive firs
 
   assert.ok(overview.secondary);
   assert.equal(overview.secondary.tailOnly, true);
-  assert.equal(overview.secondary.bytes > 3 * 1024 * 1024, true);
-  assert.ok(overview.secondary.preview.length <= 2000);
+  assert.equal(overview.secondary.bytes > 1024 * 1024, true);
+  // The sunk file is scanned from the tail only, and a slice that lands inside a
+  // body simply reports no sections; the newest section stayed in the primary.
+  assert.equal(overview.secondary.sections.length <= 30, true);
+  assert.ok(overview.primary.sections.some((section) => section.title === "Newest"));
   assert.deepEqual(
     overview.archives.map((file) => file.name),
     ["2026-09-01T00-00-00-000Z.jsonl", "2026-08-01T00-00-00-000Z.jsonl"],

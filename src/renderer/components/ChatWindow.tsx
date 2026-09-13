@@ -15,7 +15,7 @@ import {
   isAssistantFailure,
   splitFinalAssistantBlocks,
 } from "@/lib/message-display";
-import { MemoryOverviewPanel } from "./MemoryOverviewPanel";
+import { MemoryMapPanel } from "./MemoryMapPanel";
 import { MessageView } from "./MessageView";
 import { SessionProfiler } from "./SessionProfiler";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
@@ -43,6 +43,8 @@ interface Props {
   onSystemPromptChange?: (prompt: string | null) => void;
   onSessionStatsChange?: (stats: SessionStatsInfo | null) => void;
   onSessionStatsPanelOpen?: () => void;
+  /** Open a URL in the app's browser dock (used for the Accordion context map). */
+  onOpenUrl?: (url: string) => void;
   onContextUsageChange?: (
     usage: { percent: number | null; contextWindow: number; tokens: number | null } | null,
   ) => void;
@@ -223,6 +225,7 @@ export function ChatWindow({
   onSystemPromptChange,
   onSessionStatsChange,
   onSessionStatsPanelOpen,
+  onOpenUrl,
   onContextUsageChange,
   onOpenFile,
 }: Props) {
@@ -590,8 +593,10 @@ export function ChatWindow({
       {extensionDialog && <ExtensionDialog request={extensionDialog} onRespond={respondToExtensionUi} />}
 
       {memoryPanelOpen && (
-        <MemoryOverviewPanel
+        <MemoryMapPanel
           sessionId={sessionStats?.sessionId ?? session?.id ?? null}
+          cwd={session?.cwd ?? newSessionCwd ?? null}
+          onOpenUrl={onOpenUrl ?? undefined}
           onClose={() => setMemoryPanelOpen(false)}
         />
       )}

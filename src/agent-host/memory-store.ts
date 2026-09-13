@@ -30,7 +30,7 @@
  * being silently lost — see `memoryArchiveNotice`.
  */
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import type { MemoryOverview, MemoryTextOverview } from "../shared/api-types";
+import type { MemoryOverview, MemorySectionOverview, MemoryTextOverview } from "../shared/api-types";
 import {
   chmodSync,
   closeSync,
@@ -54,7 +54,7 @@ export const MEMORY_SCRIPT_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const MEMORY_SCRIPT_HEAD_BYTES = 4096;
 /** Bounds for the read-only memory overview shown in the app. */
 const MEMORY_OVERVIEW_TAIL_BYTES = 64 * 1024;
-const MEMORY_OVERVIEW_PREVIEW_CHARS = 2000;
+const MEMORY_OVERVIEW_SECTION_PREVIEW_CHARS = 800;
 const MEMORY_OVERVIEW_MAX_SECTIONS = 30;
 const MEMORY_OVERVIEW_MAX_ARCHIVES = 20;
 
@@ -326,16 +326,46 @@ function readSlice(path: string, start: number, maxBytes: number): string {
   }
 }
 
-/** `## ` headings of a memory text, bounded. */
-function extractSections(text: string): string[] {
-  const sections: string[] = [];
+/**
+ * Split a memory text into its `## ` sections, sized and previewed.
+ *
+ * The UI draws one tile per section, so each needs a weight (bytes) and enough
+ * text to inspect on click. A section ends where the next `## ` begins; text
+ * before the first heading is reported separately so nothing is unaccounted for.
+ */
+function extractSections(text: string): { sections: MemorySectionOverview[]; uncoveredBytes: number } {
+  const sections: MemorySectionOverview[] = [];
+  let uncoveredBytes = 0;
+  let current: { title: string; lines: string[] } | null = null;
+
+  const flush = () => {
+    if (!current) return;
+    const body = current.lines.join("\n");
+    if (sections.length < MEMORY_OVERVIEW_MAX_SECTIONS) {
+      sections.push({
+        title: current.title,
+        bytes: byteLength(`${current.title}\n${body}`),
+        preview: body.trim().slice(0, MEMORY_OVERVIEW_SECTION_PREVIEW_CHARS),
+      });
+    } else {
+      uncoveredBytes += byteLength(current.title) + byteLength(body);
+    }
+    current = null;
+  };
+
   for (const line of text.split("\n")) {
     const match = /^##\s+(.+?)\s*$/.exec(line);
-    if (!match) continue;
-    sections.push(match[1]);
-    if (sections.length >= MEMORY_OVERVIEW_MAX_SECTIONS) break;
+    if (match) {
+      flush();
+      current = { title: match[1], lines: [] };
+      continue;
+    }
+    if (current) current.lines.push(line);
+    else uncoveredBytes += byteLength(line) + 1;
   }
-  return sections;
+  flush();
+
+  return { sections, uncoveredBytes };
 }
 
 /** Archive files, newest first. */
@@ -383,8 +413,8 @@ function describeMemoryText(path: string, tailOnly: boolean): MemoryTextOverview
     : readSlice(path, 0, size);
   // A tail slice may start mid-line (and mid-character): drop the first line.
   const text = tailOnly && slice.length > 0 ? slice.slice(slice.indexOf("\n") + 1) : slice;
-  const preview = tailOnly ? text.slice(-MEMORY_OVERVIEW_PREVIEW_CHARS) : text.slice(0, MEMORY_OVERVIEW_PREVIEW_CHARS);
-  return { path, bytes: size, updatedAt, sections: extractSections(text), preview, tailOnly };
+  const { sections, uncoveredBytes } = extractSections(text);
+  return { path, bytes: size, updatedAt, sections, uncoveredBytes, tailOnly };
 }
 
 /** Everything "压缩为记忆" has produced for a session, ready for the UI. */

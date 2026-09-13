@@ -77,6 +77,7 @@ import {
 } from "../shared/file-types";
 import { createFileWatchService } from "./file-watch";
 import { countBranchConversationMessages, countBranchConversationTurns } from "../shared/auto-compact";
+import { readAccordionStatus } from "./accordion-registry";
 import { readHostSettings, writeHostSettings } from "./host-settings";
 import { readMemoryOverview } from "./memory-store";
 import { callMain } from "./parent-rpc";
@@ -618,6 +619,8 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
       }
       return { content: lines.join("\n"), suggestedName: `session-${id}.md` };
     },
+
+    "accordion.status": async () => readAccordionStatus(),
 
     "memory.overview": async (params) => {
       const { sessionId } = params as { sessionId: string };

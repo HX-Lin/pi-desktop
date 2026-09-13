@@ -19,6 +19,7 @@ import type {
   WorktreeInfo,
 } from "./types";
 import type {
+  AccordionStatus,
   GitStatusResult,
   MemoryOverview,
   PluginActionParams,
@@ -201,6 +202,11 @@ export interface Api {
     params: { path: string; sourceSessionId?: string };
     result: { base64: string; size: number; mime: string };
   };
+  "accordion.status": {
+    params: void;
+    result: AccordionStatus;
+  };
+
   "memory.overview": {
     params: { sessionId: string };
     result: MemoryOverview;

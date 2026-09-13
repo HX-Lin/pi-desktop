@@ -230,6 +230,11 @@ export async function cancelModelsRefresh(requestId: string) {
   return call("models.refreshCancel", { requestId });
 }
 
+/** Live Accordion context maps registered on this machine. */
+export async function accordionStatus() {
+  return call("accordion.status");
+}
+
 /** Read-only summary of what "压缩为记忆" has stored for a session. */
 export async function memoryOverview(sessionId: string) {
   return call("memory.overview", { sessionId });
