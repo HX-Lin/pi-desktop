@@ -62,6 +62,8 @@ interface Props {
   onCompactContext?: () => void;
   /** "压缩为记忆": distillation prompt, sedimented scripts, history prune. */
   onCompactMemory?: () => void;
+  /** Open the read-only overview of what this session has in memory. */
+  onShowMemory?: () => void;
   onAbortCompaction?: () => void;
   isCompacting?: boolean;
   /** Only the memory compaction control reacts to this; a plain context compaction is false. */
@@ -239,6 +241,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
     onModelsRefreshCancel,
     onCompactContext,
     onCompactMemory,
+    onShowMemory,
     onAbortCompaction,
     isCompacting,
     isMemoryCompacting = false,
@@ -968,7 +971,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
   const compactHintAt = Math.min(AUTO_COMPACT_HINT_TURNS, Math.max(1, compactThreshold - 1));
   // Always show the compaction control for any chat (even empty ones) so the
   // manual action is permanently discoverable, never gated on message count.
-  const showCompactHint = Boolean(onCompactMemory);
+  const showCompactHint = Boolean(onCompactMemory || onShowMemory);
   const compactIsNearLimit = conversationTurns >= compactHintAt;
   const compactBarText =
     conversationTurns >= compactThreshold
@@ -1326,6 +1329,33 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
               {compactBarLabel}
               {compactMessageDetail ? ` · ${compactMessageDetail}` : ""}
             </span>
+            {onShowMemory && (
+              <button
+                type="button"
+                onClick={onShowMemory}
+                title={t("memoryOverview", "Memory overview")}
+                style={{
+                  flexShrink: 0,
+                  padding: "3px 10px",
+                  background: "transparent",
+                  border: "1px solid var(--border)",
+                  borderRadius: 5,
+                  color: "var(--text-muted)",
+                  cursor: "pointer",
+                  fontSize: 12,
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = "var(--bg-hover)";
+                  e.currentTarget.style.color = "var(--text)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "transparent";
+                  e.currentTarget.style.color = "var(--text-muted)";
+                }}
+              >
+                {t("memoryOverview", "Memory overview")}
+              </button>
+            )}
             <button
               type="button"
               onClick={() => (isMemoryCompacting ? onAbortCompaction?.() : onCompactMemory?.())}

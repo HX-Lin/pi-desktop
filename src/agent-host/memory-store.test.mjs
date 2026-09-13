@@ -27,7 +27,9 @@ const {
   SECONDARY_MEMORY_MAX_BYTES,
   listMemoryScripts,
   memoryArchiveNotice,
+  memoryDir,
   memoryScriptIndex,
+  readMemoryOverview,
   secondaryMemoryPath,
   memoryScriptsDir,
   readPrimaryMemory,
@@ -161,4 +163,60 @@ test("the archived memory is announced to the model only once it exists", () => 
   assert.ok(notice, "expected an archive notice");
   assert.ok(notice.includes(secondaryMemoryPath(sessionId)));
   assert.ok(notice.includes("记忆归档"));
+});
+
+test("the overview summarizes every tier without loading whole files", () => {
+  const sessionId = "session-overview";
+
+  assert.deepEqual(readMemoryOverview(sessionId), {
+    sessionId,
+    dir: memoryDir(sessionId),
+    exists: false,
+    primary: null,
+    secondary: null,
+    scripts: [],
+    archives: [],
+    archivesBytes: 0,
+  });
+
+  syncSessionMemory(sessionId, "## Goal\nship it\n\n## Next Steps\n1. done\n");
+  writeScript(sessionId, "deploy.sh", "#!/usr/bin/env bash\n# description: 部署\n");
+  mkdirSync(path.join(memoryDir(sessionId), "archive"), { recursive: true });
+  writeFileSync(path.join(memoryDir(sessionId), "archive", "2026-09-13T00-00-00-000Z.jsonl"), "{}\n");
+
+  const overview = readMemoryOverview(sessionId);
+
+  assert.equal(overview.exists, true);
+  assert.deepEqual(overview.primary.sections, ["Goal", "Next Steps"]);
+  assert.ok(overview.primary.preview.startsWith("## Goal"));
+  assert.equal(overview.primary.tailOnly, false);
+  assert.equal(overview.secondary, null);
+  assert.deepEqual(overview.scripts, [
+    { name: "deploy.sh", description: "部署", bytes: Buffer.byteLength("#!/usr/bin/env bash\n# description: 部署\n") },
+  ]);
+  assert.equal(overview.archives.length, 1);
+  assert.equal(overview.archives[0].name, "2026-09-13T00-00-00-000Z.jsonl");
+  assert.equal(overview.archivesBytes > 0, true);
+});
+
+test("the overview reports the newest part of a sunk memory, newest archive first", () => {
+  const sessionId = "session-overview-tail";
+  const oversized = `${"## Old\n".repeat(2000)}${"z".repeat(4 * 1024 * 1024)}\n\n## Newest\nmost recent\n`;
+  syncSessionMemory(sessionId, oversized);
+
+  mkdirSync(path.join(memoryDir(sessionId), "archive"), { recursive: true });
+  for (const name of ["2026-08-01T00-00-00-000Z.jsonl", "2026-09-01T00-00-00-000Z.jsonl"]) {
+    writeFileSync(path.join(memoryDir(sessionId), "archive", name), "{}\n");
+  }
+
+  const overview = readMemoryOverview(sessionId);
+
+  assert.ok(overview.secondary);
+  assert.equal(overview.secondary.tailOnly, true);
+  assert.equal(overview.secondary.bytes > 3 * 1024 * 1024, true);
+  assert.ok(overview.secondary.preview.length <= 2000);
+  assert.deepEqual(
+    overview.archives.map((file) => file.name),
+    ["2026-09-01T00-00-00-000Z.jsonl", "2026-08-01T00-00-00-000Z.jsonl"],
+  );
 });

@@ -15,6 +15,7 @@ import {
   isAssistantFailure,
   splitFinalAssistantBlocks,
 } from "@/lib/message-display";
+import { MemoryOverviewPanel } from "./MemoryOverviewPanel";
 import { MessageView } from "./MessageView";
 import { SessionProfiler } from "./SessionProfiler";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
@@ -416,6 +417,7 @@ export function ChatWindow({
   // and fill the rest over the next frames (the user perceives an instant
   // first paint).
   const [visibleMessageCount, setVisibleMessageCount] = useState(Number.MAX_SAFE_INTEGER);
+  const [memoryPanelOpen, setMemoryPanelOpen] = useState(false);
   useEffect(() => {
     setVisibleMessageCount(24);
     let raf2 = 0;
@@ -459,6 +461,7 @@ export function ChatWindow({
       onModelsRefresh={refreshModels}
       onModelsRefreshCancel={cancelModelRefresh}
       onCompactContext={session || isNew ? () => void handleCompact("context") : undefined}
+      onShowMemory={session || isNew ? () => setMemoryPanelOpen(true) : undefined}
       onCompactMemory={session || isNew ? () => void handleCompact("memory") : undefined}
       onAbortCompaction={handleAbortCompaction}
       isCompacting={isCompacting}
@@ -585,6 +588,13 @@ export function ChatWindow({
       )}
 
       {extensionDialog && <ExtensionDialog request={extensionDialog} onRespond={respondToExtensionUi} />}
+
+      {memoryPanelOpen && (
+        <MemoryOverviewPanel
+          sessionId={sessionStats?.sessionId ?? session?.id ?? null}
+          onClose={() => setMemoryPanelOpen(false)}
+        />
+      )}
 
       {extensionCustomUi && <ExtensionCustomPanel request={extensionCustomUi} onInput={sendExtensionCustomInput} />}
 

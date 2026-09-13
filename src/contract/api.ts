@@ -20,6 +20,7 @@ import type {
 } from "./types";
 import type {
   GitStatusResult,
+  MemoryOverview,
   PluginActionParams,
   PluginsResponse,
   PromptScope,
@@ -200,6 +201,11 @@ export interface Api {
     params: { path: string; sourceSessionId?: string };
     result: { base64: string; size: number; mime: string };
   };
+  "memory.overview": {
+    params: { sessionId: string };
+    result: MemoryOverview;
+  };
+
   // Desktop settings that the Host persists (auto-compaction, ...)
   "settings.get": {
     params: void;

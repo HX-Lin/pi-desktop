@@ -30,6 +30,7 @@
  * being silently lost — see `memoryArchiveNotice`.
  */
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import type { MemoryOverview, MemoryTextOverview } from "../shared/api-types";
 import {
   chmodSync,
   closeSync,
@@ -51,6 +52,11 @@ export const MEMORY_ARCHIVE_MAX_BYTES = 256 * 1024 * 1024;
 /** Script names must be plain file names: no separators, no leading dot. */
 export const MEMORY_SCRIPT_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const MEMORY_SCRIPT_HEAD_BYTES = 4096;
+/** Bounds for the read-only memory overview shown in the app. */
+const MEMORY_OVERVIEW_TAIL_BYTES = 64 * 1024;
+const MEMORY_OVERVIEW_PREVIEW_CHARS = 2000;
+const MEMORY_OVERVIEW_MAX_SECTIONS = 30;
+const MEMORY_OVERVIEW_MAX_ARCHIVES = 20;
 
 /** Cap for the memory that stays in the active context. */
 export const PRIMARY_MEMORY_MAX_BYTES = 3 * 1024 * 1024;
@@ -297,17 +303,111 @@ function scriptDescription(head: string): string {
 
 /** Read just enough of a script to find its description. */
 function readHead(path: string): string {
+  return readSlice(path, 0, MEMORY_SCRIPT_HEAD_BYTES);
+}
+
+/**
+ * Read a bounded slice of a file.
+ *
+ * Memory files can be tens of megabytes, so overviews never load them whole.
+ */
+function readSlice(path: string, start: number, maxBytes: number): string {
+  if (maxBytes <= 0) return "";
   let fd: number | undefined;
   try {
     fd = openSync(path, "r");
-    const buffer = Buffer.alloc(MEMORY_SCRIPT_HEAD_BYTES);
-    const read = readSync(fd, buffer, 0, MEMORY_SCRIPT_HEAD_BYTES, 0);
+    const buffer = Buffer.alloc(maxBytes);
+    const read = readSync(fd, buffer, 0, maxBytes, start);
     return buffer.subarray(0, read).toString("utf8");
   } catch {
     return "";
   } finally {
     if (fd !== undefined) closeSync(fd);
   }
+}
+
+/** `## ` headings of a memory text, bounded. */
+function extractSections(text: string): string[] {
+  const sections: string[] = [];
+  for (const line of text.split("\n")) {
+    const match = /^##\s+(.+?)\s*$/.exec(line);
+    if (!match) continue;
+    sections.push(match[1]);
+    if (sections.length >= MEMORY_OVERVIEW_MAX_SECTIONS) break;
+  }
+  return sections;
+}
+
+/** Archive files, newest first. */
+function listArchiveFiles(sessionId: string): Array<{ name: string; bytes: number }> {
+  const dir = memoryArchiveDir(sessionId);
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter((name) => name.endsWith(".jsonl"));
+  } catch {
+    return [];
+  }
+  return names
+    .sort()
+    .reverse()
+    .map((name) => {
+      let bytes = 0;
+      try {
+        bytes = statSync(join(dir, name)).size;
+      } catch {
+        // Raced with the retention sweep.
+      }
+      return { name, bytes };
+    });
+}
+
+/**
+ * Describe one memory text without loading it whole.
+ *
+ * `tailOnly` is for files that can be huge (the archive of sunk memory): only the
+ * newest slice is scanned, which is also the part worth previewing.
+ */
+function describeMemoryText(path: string, tailOnly: boolean): MemoryTextOverview | null {
+  let size: number;
+  let updatedAt: number;
+  try {
+    const stats = statSync(path);
+    size = stats.size;
+    updatedAt = stats.mtimeMs;
+  } catch {
+    return null;
+  }
+
+  const slice = tailOnly
+    ? readSlice(path, Math.max(0, size - MEMORY_OVERVIEW_TAIL_BYTES), MEMORY_OVERVIEW_TAIL_BYTES)
+    : readSlice(path, 0, size);
+  // A tail slice may start mid-line (and mid-character): drop the first line.
+  const text = tailOnly && slice.length > 0 ? slice.slice(slice.indexOf("\n") + 1) : slice;
+  const preview = tailOnly ? text.slice(-MEMORY_OVERVIEW_PREVIEW_CHARS) : text.slice(0, MEMORY_OVERVIEW_PREVIEW_CHARS);
+  return { path, bytes: size, updatedAt, sections: extractSections(text), preview, tailOnly };
+}
+
+/** Everything "压缩为记忆" has produced for a session, ready for the UI. */
+export function readMemoryOverview(sessionId: string): MemoryOverview {
+  const primary = describeMemoryText(primaryMemoryPath(sessionId), false);
+  const secondary = describeMemoryText(secondaryMemoryPath(sessionId), true);
+  const scripts = listMemoryScripts(sessionId).map((script) => ({
+    name: script.name,
+    description: script.description,
+    bytes: script.bytes,
+  }));
+  const archives = listArchiveFiles(sessionId).slice(0, MEMORY_OVERVIEW_MAX_ARCHIVES);
+  const archiveSummary = listMemoryArchives(sessionId);
+  return {
+    sessionId,
+    dir: memoryDir(sessionId),
+    exists: Boolean(primary || secondary || scripts.length > 0 || archiveSummary.files > 0),
+    primary,
+    secondary,
+    scripts,
+    archives,
+    archivesBytes: archiveSummary.bytes,
+  };
 }
 
 /**

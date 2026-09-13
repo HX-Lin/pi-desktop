@@ -78,6 +78,7 @@ import {
 import { createFileWatchService } from "./file-watch";
 import { countBranchConversationMessages, countBranchConversationTurns } from "../shared/auto-compact";
 import { readHostSettings, writeHostSettings } from "./host-settings";
+import { readMemoryOverview } from "./memory-store";
 import { callMain } from "./parent-rpc";
 import { createAuthLoginService, resolveLoginCode } from "./auth-login";
 import { getSharedModelRuntime, modelCatalogRefreshCoordinator, reloadSharedModelRuntimeConfig } from "./model-runtime";
@@ -616,6 +617,12 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
         lines.push("");
       }
       return { content: lines.join("\n"), suggestedName: `session-${id}.md` };
+    },
+
+    "memory.overview": async (params) => {
+      const { sessionId } = params as { sessionId: string };
+      if (!sessionId) throw new RpcError({ code: "INVALID_ARGUMENT", message: "sessionId is required" });
+      return readMemoryOverview(sessionId);
     },
 
     "settings.get": async () => readHostSettings(),
