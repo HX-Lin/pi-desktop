@@ -124,7 +124,7 @@ export function MemoryMapPanel({ sessionId, onClose, contextRefreshKey = 0 }: Me
 
           {tab === "memory" && overview?.exists && (
             <div style={splitStyle}>
-              <div style={{ ...columnStyle, display: "grid", gap: 10, alignContent: "start" }}>
+              <div style={{ ...columnStyle, minHeight: 0 }}>
                 <Tally tiles={tiles} overview={overview} />
                 <TileGrid tiles={tiles} selected={selected} onSelect={setSelected} />
               </div>
@@ -391,7 +391,18 @@ function Inspector({ tile }: { tile: Tile | null }) {
   const { t } = useI18n();
   if (!tile) return null;
   return (
-    <section style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
+    <section
+      style={{
+        width: "100%",
+        flex: 1,
+        minHeight: 0,
+        display: "flex",
+        flexDirection: "column",
+        border: "1px solid var(--border)",
+        borderRadius: 8,
+        overflow: "hidden",
+      }}
+    >
       <div
         style={{
           display: "flex",
@@ -413,7 +424,8 @@ function Inspector({ tile }: { tile: Tile | null }) {
         style={{
           margin: 0,
           padding: "10px 12px",
-          maxHeight: 240,
+          flex: 1,
+          minHeight: 0,
           overflow: "auto",
           fontSize: 11,
           lineHeight: 1.55,
@@ -444,51 +456,58 @@ function Hint({ children, tone }: { children: React.ReactNode; tone?: "error" })
   );
 }
 
-/**
- * Docked to the right edge, full height: the map is a side panel, not a popup —
- * nothing has to be scrolled into view to be read.
- */
 const overlayStyle = {
   position: "absolute",
   inset: 0,
   zIndex: 90,
   display: "flex",
-  justifyContent: "flex-end",
-  background: "rgba(0,0,0,0.14)",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 20,
+  background: "rgba(0,0,0,0.18)",
 } as const;
 
+/** Wide enough for the picker and the content column to sit side by side. */
 const dialogStyle = {
-  width: "min(1020px, 96%)",
-  height: "100%",
+  width: "min(1040px, 96%)",
+  height: "min(760px, 88vh)",
   display: "flex",
   flexDirection: "column",
   background: "var(--bg-panel)",
-  borderLeft: "1px solid var(--border)",
-  boxShadow: "-14px 0 40px rgba(0,0,0,0.18)",
+  border: "1px solid var(--border)",
+  borderRadius: 10,
+  boxShadow: "0 18px 48px rgba(0,0,0,0.22)",
   overflow: "hidden",
 } as const;
 
 const bodyStyle = {
   flex: 1,
   minHeight: 0,
-  overflowY: "auto",
+  display: "flex",
+  flexDirection: "column",
   padding: "14px 16px 18px",
 } as const;
 
-/** Picker on the left, inspected content on the right, scrolling independently. */
+/**
+ * Picker on the left, inspected content on the right. Both columns fill the
+ * dialog height and scroll independently, so the content never has to be
+ * scrolled into view.
+ */
 const splitStyle = {
+  flex: 1,
+  minHeight: 0,
   display: "grid",
-  gridTemplateColumns: "minmax(0, 1fr) minmax(280px, 420px)",
+  gridTemplateColumns: "minmax(0, 1fr) minmax(300px, 420px)",
   gap: 14,
-  alignItems: "start",
 } as const;
 
-const columnStyle = { minWidth: 0 } as const;
+const columnStyle = { minWidth: 0, overflowY: "auto", paddingRight: 4 } as const;
 
 const contentColumnStyle = {
-  position: "sticky",
-  top: 0,
   minWidth: 0,
+  overflowY: "auto",
+  display: "flex",
+  flexDirection: "column",
 } as const;
 
 const headerStyle = {

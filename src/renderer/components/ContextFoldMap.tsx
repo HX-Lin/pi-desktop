@@ -92,7 +92,7 @@ export function ContextFoldMap({ sessionId, refreshKey = 0 }: ContextFoldMapProp
 
   return (
     <div style={splitStyle}>
-      <div style={{ display: "grid", gap: 12, minWidth: 0, alignContent: "start" }}>
+      <div style={pickerColumnStyle}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <button
             type="button"
@@ -201,7 +201,18 @@ export function ContextFoldMap({ sessionId, refreshKey = 0 }: ContextFoldMapProp
       </div>
 
       <div style={contentColumnStyle}>
-        <section style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
+        <section
+          style={{
+            width: "100%",
+            flex: 1,
+            minHeight: 0,
+            display: "flex",
+            flexDirection: "column",
+            border: "1px solid var(--border)",
+            borderRadius: 8,
+            overflow: "hidden",
+          }}
+        >
           <div
             style={{
               display: "flex",
@@ -299,16 +310,28 @@ function weightOf(tokens: number): number {
 }
 
 const splitStyle = {
+  flex: 1,
+  minHeight: 0,
   display: "grid",
-  gridTemplateColumns: "minmax(0, 1fr) minmax(260px, 380px)",
+  gridTemplateColumns: "minmax(0, 1fr) minmax(280px, 380px)",
   gap: 14,
-  alignItems: "start",
+} as const;
+
+const pickerColumnStyle = {
+  minWidth: 0,
+  minHeight: 0,
+  overflowY: "auto",
+  paddingRight: 4,
+  display: "grid",
+  gap: 12,
+  alignContent: "start",
 } as const;
 
 const contentColumnStyle = {
-  position: "sticky",
-  top: 0,
   minWidth: 0,
+  overflowY: "auto",
+  display: "flex",
+  flexDirection: "column",
 } as const;
 
 const toggleStyle = {
@@ -334,7 +357,8 @@ const actionStyle = {
 const previewStyle = {
   margin: 0,
   padding: "10px 12px",
-  maxHeight: 220,
+  flex: 1,
+  minHeight: 0,
   overflow: "auto",
   fontSize: 11,
   lineHeight: 1.55,
