@@ -19,7 +19,9 @@ await build({
   packages: "external",
   logLevel: "silent",
 });
-const { JevUnavailableError, createJevClient } = await import(`${pathToFileURL(output).href}?v=${Date.now()}`);
+const { JevUnavailableError, createJevClient, describeHttpFailure } = await import(
+  `${pathToFileURL(output).href}?v=${Date.now()}`
+);
 
 const questions = {
   "t1.keep": { type: "noul", instructions: "does call t1 still matter?" },
@@ -221,4 +223,31 @@ test("caller cancellation is not turned into a verdict", async () => {
     },
   });
   await assert.rejects(() => c.ask("state", {}, { signal: controller.signal }));
+});
+
+test("a provider failure keeps the provider's own words", () => {
+  // The exact envelope Vercel AI Gateway answers with when the account has no
+  // card: a 200-character slice of this JSON used to be the entire message.
+  const body = JSON.stringify({
+    error: {
+      message:
+        "AI Gateway requires a valid credit card on file to service requests. Please visit https://vercel.com/d?to=%2F%5Bteam%5D to add a card and unlock your free credits.",
+    },
+  });
+  const described = describeHttpFailure(402, body);
+
+  assert.match(described, /^HTTP 402 · this endpoint requires billing or credits · /);
+  assert.match(described, /requires a valid credit card/);
+  assert.match(described, /unlock your free credits/);
+  assert.ok(!described.includes("{"), "the envelope itself must not be shown");
+
+  // Statuses that point at a different fix say so.
+  assert.match(describeHttpFailure(401, '{"error":{"message":"invalid api key"}}'), /the API key was rejected/);
+  assert.match(describeHttpFailure(404, "{}"), /endpoint URL or the model name is wrong/);
+  assert.match(describeHttpFailure(429, ""), /^HTTP 429 · rate limited$/);
+
+  // A non-JSON body (a proxy's HTML page) is still reported, not swallowed.
+  assert.match(describeHttpFailure(502, "<html><body>Bad gateway</body></html>"), /Bad gateway/);
+  // Long bodies are bounded.
+  assert.ok(describeHttpFailure(500, "x".repeat(2000)).length < 460);
 });

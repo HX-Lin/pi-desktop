@@ -65,6 +65,20 @@ export const JEV_CHANNELS: readonly JevChannelDefinition[] = [
     vaultKey: "jev.openrouter",
     keyHint: "OPENROUTER_API_KEY",
   },
+  {
+    // Any OpenAI-compatible chat endpoint: a gateway that bills differently, a
+    // provider you already pay for, or a local server. Vercel's AI Gateway, for
+    // instance, refuses requests without a card on file, and this is the way
+    // around that rather than a fork of the transport.
+    id: "custom",
+    label: "OpenAI-compatible (custom endpoint)",
+    protocol: "chat",
+    baseUrl: "",
+    model: "",
+    apiKeyEnv: ["JEV_API_KEY", "OPENAI_API_KEY"],
+    vaultKey: "jev.custom",
+    keyHint: "JEV_API_KEY",
+  },
 ];
 
 export const DEFAULT_JEV_CHANNEL = "typesafe";

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { isCredentialKey, normalizeCredentialKey } from "./credential-keys.ts";
+import { JEV_CHANNELS } from "../agent-host/jev/channels.ts";
 
 test("accepts the channel and Jev namespaces", () => {
   // Messaging channel accounts.
@@ -17,6 +18,15 @@ test("accepts the channel and Jev namespaces", () => {
   // A new gateway is a configuration entry, so the namespace must not be a list
   // of the three shipped channels.
   assert.equal(normalizeCredentialKey("jev.my-gateway"), "jev.my-gateway");
+});
+
+test("every Jev channel's vault key is storable", () => {
+  // The two lists live in different processes, so this is the check that would
+  // have caught the shipped bug: adding a channel whose vault key the vault
+  // refuses makes its key impossible to save from Settings.
+  for (const channel of JEV_CHANNELS) {
+    assert.equal(normalizeCredentialKey(channel.vaultKey), channel.vaultKey);
+  }
 });
 
 test("refuses everything else", () => {

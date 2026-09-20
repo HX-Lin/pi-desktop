@@ -137,6 +137,7 @@ export function JevConfig() {
           <input
             defaultValue={channel.baseUrl}
             disabled={busy}
+            placeholder="https://host/v1/chat/completions"
             onBlur={(event) => {
               const value = event.target.value.trim();
               if (value && value !== channel.baseUrl) void update({ baseUrl: value });
@@ -150,6 +151,7 @@ export function JevConfig() {
           <input
             defaultValue={channel.model}
             disabled={busy}
+            placeholder="model-name"
             onBlur={(event) => {
               const value = event.target.value.trim();
               if (value && value !== channel.model) void update({ model: value });

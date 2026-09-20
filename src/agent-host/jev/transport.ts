@@ -184,7 +184,7 @@ async function requestDecisions(
   });
   const text = await response.text();
   if (!response.ok) {
-    return { ok: false, reason: "http", status: response.status, message: text.slice(0, 200) };
+    return { ok: false, reason: "http", status: response.status, message: describeHttpFailure(response.status, text) };
   }
   let parsed: unknown;
   try {
@@ -223,7 +223,7 @@ async function requestChat(
   });
   const text = await response.text();
   if (!response.ok) {
-    return { ok: false, reason: "http", status: response.status, message: text.slice(0, 200) };
+    return { ok: false, reason: "http", status: response.status, message: describeHttpFailure(response.status, text) };
   }
   const envelope = parseJson(text);
   if (!isRecord(envelope)) return { ok: false, reason: "malformed_response", message: "chat reply was not JSON" };
@@ -345,6 +345,57 @@ function readCount(value: unknown): number {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** What a status code usually means, so the fix is obvious from the message. */
+const STATUS_HINTS: Record<number, string> = {
+  400: "the endpoint rejected the request",
+  401: "the API key was rejected",
+  402: "this endpoint requires billing or credits",
+  403: "the key is not allowed to use this endpoint or model",
+  404: "the endpoint URL or the model name is wrong",
+  429: "rate limited",
+};
+
+/**
+ * Turn a failed response into something a user can act on.
+ *
+ * Gateways answer with an envelope (`{"error":{"message":"…"}}` and friends),
+ * so a raw `JSON.stringify` — or worse, a 200-character slice of one — hides the
+ * only useful part. The provider's own message is kept (it names the missing
+ * card, the wrong model, the expired key) and the status adds the direction.
+ */
+export function describeHttpFailure(status: number, body: string): string {
+  const parts = [`HTTP ${status}`];
+  const hint = STATUS_HINTS[status];
+  if (hint) parts.push(hint);
+  const detail = providerMessage(body);
+  if (detail) parts.push(detail);
+  return parts.join(" · ");
+}
+
+/** The human-readable message inside a provider error envelope. */
+function providerMessage(body: string): string {
+  const trimmed = body.trim();
+  if (!trimmed) return "";
+  let text = trimmed;
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (parsed && typeof parsed === "object") {
+      const envelope = parsed as Record<string, unknown>;
+      const error = envelope.error;
+      const candidate =
+        (error && typeof error === "object" ? (error as Record<string, unknown>).message : undefined) ??
+        (typeof error === "string" ? error : undefined) ??
+        envelope.message ??
+        envelope.detail;
+      if (typeof candidate === "string" && candidate.trim()) text = candidate;
+    }
+  } catch {
+    // Not JSON: the body itself is the message (a proxy's HTML error page, say).
+  }
+  const collapsed = text.replace(/\s+/g, " ").trim();
+  return collapsed.length > 400 ? `${collapsed.slice(0, 400)}…` : collapsed;
 }
 
 /** A 5xx or a rate limit may pass on the next attempt; a 4xx will not. */

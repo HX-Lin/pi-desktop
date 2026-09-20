@@ -127,6 +127,9 @@ export async function getJevRuntime(overrides: Partial<JevSettings> = {}): Promi
   const { channel, baseUrl, model } = resolveJevEndpoint(settings);
   const key = await resolveJevKey(channel);
   if (!key.apiKey) return null;
+  // A channel that is not fully configured is not a runtime: report it as
+  // unavailable rather than sending a request to an empty URL.
+  if (!baseUrl.trim() || !model.trim()) return null;
   return {
     settings,
     channel,
@@ -149,8 +152,32 @@ export async function getJevRuntime(overrides: Partial<JevSettings> = {}): Promi
  * which is what tells a working channel from one that merely returns 200.
  */
 export async function testJevChannel(): Promise<JevTestResult> {
-  const runtime = await getJevRuntime({ enabled: true });
-  if (!runtime) return { ok: false, reason: "no_key", message: "No Jev API key is configured for this channel." };
+  // Reported field by field rather than through `getJevRuntime`, whose single
+  // null answer cannot say *what* is missing — which is the whole point of a
+  // Test button.
+  const settings = { ...readJevSettings(), enabled: true };
+  const { channel, baseUrl, model } = resolveJevEndpoint(settings);
+  if (!baseUrl.trim()) {
+    return { ok: false, reason: "no_endpoint", message: `Set the endpoint URL for ${channel.label}.` };
+  }
+  if (!model.trim()) {
+    return { ok: false, reason: "no_model", message: `Set the model name for ${channel.label}.` };
+  }
+  const key = await resolveJevKey(channel);
+  if (!key.apiKey) {
+    return { ok: false, reason: "no_key", message: `No API key is configured for ${channel.label}.` };
+  }
+
+  const runtime = {
+    client: createJevClient({
+      protocol: channel.protocol,
+      baseUrl,
+      model,
+      apiKey: key.apiKey,
+      timeoutMs: settings.gate.timeoutMs,
+      maxRetries: settings.gate.maxRetries,
+    }),
+  };
 
   const started = Date.now();
   const outcome = await runtime.client.ask(
