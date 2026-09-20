@@ -7,6 +7,9 @@
 import type { InlineExtension, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import qoderProviderFactory from "./vendor/qoder";
 import { CONTEXT_FOLD_EXTENSION } from "./context-fold-extension";
+import { JEV_COMPACTION_EXTENSION } from "./jev/compaction/hook";
+import { JEV_GATE_EXTENSION } from "./jev/gate/extension";
+import { JEV_ROUTING_EXTENSION } from "./jev/routing/extension";
 import { MEMORY_SCRIPTS_EXTENSION } from "./memory-scripts-extension";
 
 export const BUILTIN_PROVIDER_EXTENSIONS: InlineExtension[] = [{ name: "Qoder", factory: qoderProviderFactory }];
@@ -16,6 +19,9 @@ export const BUILTIN_SESSION_EXTENSIONS: InlineExtension[] = [
   ...BUILTIN_PROVIDER_EXTENSIONS,
   MEMORY_SCRIPTS_EXTENSION,
   CONTEXT_FOLD_EXTENSION,
+  JEV_COMPACTION_EXTENSION,
+  JEV_GATE_EXTENSION,
+  JEV_ROUTING_EXTENSION,
 ];
 
 /** Register app-bundled providers on a host-level runtime used by auth APIs. */

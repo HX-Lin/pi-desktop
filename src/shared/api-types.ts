@@ -36,10 +36,22 @@ export interface JevChannelStatus {
   hasKey: boolean;
 }
 
+/** One gate condition, as the Settings page lists it for threshold tuning. */
+export interface JevRuleInfo {
+  id: string;
+  label: string;
+  /** Calibrated default from upstream. */
+  threshold: number;
+  mode: "required" | "hazard";
+  severity: "hazard" | "soft";
+  question: string;
+}
+
 export interface JevConfigPayload {
   settings: JevSettingsPayload;
   channel: JevChannelStatus;
   channels: Array<{ id: string; label: string; protocol: "decisions" | "chat"; keyHint: string }>;
+  rules: JevRuleInfo[];
 }
 
 /** Mirrors the host's JevSettings shape (kept structural, no host import). */
@@ -59,6 +71,7 @@ export interface JevSettingsPayload {
     disallowedCommands: string[];
     extraProtectedPaths: string[];
     thresholds: Record<string, number>;
+    policyNotes: string;
   };
   compaction: {
     enabled: boolean;

@@ -10,6 +10,7 @@ import { findJevChannel, envKeyVariable, JEV_CHANNELS, type JevChannelDefinition
 import { resolveJevKey, storeJevKey, clearJevKey } from "./keys";
 import { readJevSettings, resolveJevEndpoint, writeJevSettings, type JevSettings } from "./settings";
 import { createJevClient, type JevClient } from "./transport";
+import { DEFAULT_RULES } from "./gate/questions";
 
 export interface JevChannelStatus {
   id: string;
@@ -28,6 +29,28 @@ export interface JevConfigPayload {
   settings: JevSettings;
   channel: JevChannelStatus;
   channels: Array<{ id: string; label: string; protocol: "decisions" | "chat"; keyHint: string }>;
+  rules: JevRuleInfo[];
+}
+
+export interface JevRuleInfo {
+  id: string;
+  label: string;
+  threshold: number;
+  mode: "required" | "hazard";
+  severity: "hazard" | "soft";
+  question: string;
+}
+
+/** The gate's condition table, so Settings can offer a threshold per rule. */
+export function jevRuleTable(): JevRuleInfo[] {
+  return DEFAULT_RULES.map((rule) => ({
+    id: rule.id,
+    label: rule.label,
+    threshold: rule.threshold,
+    mode: rule.mode,
+    severity: rule.severity,
+    question: rule.question,
+  }));
 }
 
 export interface JevTestResult {
@@ -69,6 +92,7 @@ export async function readJevConfig(): Promise<JevConfigPayload> {
   const settings = readJevSettings();
   return {
     settings,
+    rules: jevRuleTable(),
     channel: await describeJevChannel(settings),
     channels: JEV_CHANNELS.map((channel) => ({
       id: channel.id,
@@ -81,7 +105,8 @@ export async function readJevConfig(): Promise<JevConfigPayload> {
 
 export async function updateJevConfig(patch: unknown): Promise<JevConfigPayload> {
   const settings = writeJevSettings(patch);
-  return { settings, channel: await describeJevChannel(settings), channels: (await readJevConfig()).channels };
+  const config = await readJevConfig();
+  return { ...config, settings, channel: await describeJevChannel(settings) };
 }
 
 /** Store (or clear) the key for the configured channel in the vault. */

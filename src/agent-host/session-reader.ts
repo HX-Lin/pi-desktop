@@ -7,6 +7,7 @@ import { existsSync } from "node:fs";
 import type { AgentMessage, SessionEntry, SessionInfo, SessionContext, UserMessage } from "../shared/types";
 import type { SessionEntry as PiSessionEntry, SessionInfo as PiSessionInfo } from "@earendil-works/pi-coding-agent";
 import { isMemoryCompactionEntry } from "../shared/auto-compact";
+import { DECISION_ENTRY_TYPE as JEV_DECISION_ENTRY_TYPE } from "./jev/gate/record";
 import { normalizeToolCalls } from "../shared/normalize";
 import { resolveProject, type ProjectInfo } from "../shared/worktree";
 import { sessionIndex } from "./session-index";
@@ -399,6 +400,29 @@ export function entryToUiMessage(entry: SessionEntry): AgentMessage | null {
         content: `*The conversation briefly explored another branch and returned with this summary:*\n\n${entry.summary}`,
         timestamp: parseEntryTimestamp(entry.timestamp),
       };
+    case "custom": {
+      // Only entries the app itself surfaces are rendered: other extensions use
+      // `custom` for bookkeeping (diagnostics, tags) that must stay out of the chat.
+      if (entry.customType !== JEV_DECISION_ENTRY_TYPE) return null;
+      const record = (entry.data ?? {}) as {
+        tool?: unknown;
+        status?: unknown;
+        summary?: unknown;
+        rationale?: unknown;
+      };
+      const status = typeof record.status === "string" ? record.status : "decided";
+      const tool = typeof record.tool === "string" ? record.tool : "tool";
+      const summary = typeof record.summary === "string" ? record.summary : "";
+      const rationale = typeof record.rationale === "string" ? record.rationale : "";
+      return {
+        role: "custom",
+        customType: entry.customType,
+        content: [`${status}: ${tool}`, summary, rationale].filter(Boolean).join("\n"),
+        display: true,
+        details: record,
+        timestamp: parseEntryTimestamp(entry.timestamp),
+      };
+    }
     case "custom_message":
       if (entry.customType === "pi-desktop-channel-attachment-context") return null;
       return {

@@ -202,7 +202,364 @@ export function JevConfig() {
         </Row>
       </Section>
 
+      <Divider />
+
+      <GateSection settings={settings} rules={config.rules} busy={busy} onUpdate={update} />
+
+      <Divider />
+
+      <CompactionSection settings={settings} busy={busy} onUpdate={update} />
+
+      <Divider />
+
+      <RoutingSection settings={settings} busy={busy} onUpdate={update} />
+
       {error ? <p style={{ color: "#ef4444", fontSize: 12, marginTop: 14 }}>{error}</p> : null}
+    </div>
+  );
+}
+
+/** One row per gate condition, with its calibrated default and the override. */
+function GateSection({
+  settings,
+  rules,
+  busy,
+  onUpdate,
+}: {
+  settings: JevSettingsPayload;
+  rules: JevConfigPayload["rules"];
+  busy: boolean;
+  onUpdate: (patch: unknown) => Promise<void>;
+}) {
+  const { t } = useI18n();
+  const gate = settings.gate;
+  const patchGate = (patch: Record<string, unknown>) => onUpdate({ gate: { ...gate, ...patch } });
+  const [thresholdDraft, setThresholdDraft] = useState<Record<string, string>>({});
+
+  return (
+    <Section
+      title={t("jevGate", "Permission gate")}
+      description={t(
+        "jevGateDescription",
+        "Judges bash, write and edit calls before they run, in every session (including messaging channels). The deterministic layer runs first; only what it cannot vouch for reaches Jev, and anything that cannot be judged is blocked.",
+      )}
+    >
+      <Row label={t("jevGateEnabled", "Gate tool calls")}>
+        <Checkbox checked={gate.enabled} disabled={busy} onChange={(value) => void patchGate({ enabled: value })} />
+      </Row>
+      <Row label={t("jevGateScope", "Scope")}>
+        <select
+          value={gate.scope}
+          disabled={busy}
+          onChange={(event) => void patchGate({ scope: event.target.value })}
+          style={selectStyle}
+        >
+          <option value="all">{t("jevScopeAll", "Judge everything unvouched for (recommended)")}</option>
+          <option value="matched">{t("jevScopeMatched", "Only recognised dangerous shapes")}</option>
+        </select>
+      </Row>
+      <Row label={t("jevGateUncertain", "Middle band")}>
+        <select
+          value={gate.uncertain}
+          disabled={busy}
+          onChange={(event) => void patchGate({ uncertain: event.target.value })}
+          style={selectStyle}
+        >
+          <option value="deny">{t("jevUncertainDeny", "Block")}</option>
+          <option value="ask">{t("jevUncertainAsk", "Ask me (blocks where no dialog exists)")}</option>
+          <option value="allow">{t("jevUncertainAllow", "Allow")}</option>
+        </select>
+      </Row>
+      <Row label={t("jevGateTimeout", "Per-attempt timeout (ms)")}>
+        <input
+          type="number"
+          min={500}
+          max={60_000}
+          defaultValue={gate.timeoutMs}
+          disabled={busy}
+          onBlur={(event) => void patchGate({ timeoutMs: Number(event.target.value) })}
+          style={{ ...inputStyle, maxWidth: 120 }}
+        />
+      </Row>
+
+      <ListField
+        label={t("jevSafeCommands", "Commands that run silently")}
+        hint={t(
+          "jevSafeCommandsHint",
+          "One glob per line. Use for commands that are safe on this machine (a test runner runs your code).",
+        )}
+        values={gate.safeCommands}
+        busy={busy}
+        onCommit={(values) => void patchGate({ safeCommands: values })}
+      />
+      <ListField
+        label={t("jevAllowedCommands", "Allow patterns (recorded)")}
+        hint={t("jevAllowedCommandsHint", "Overrides a dangerous-shape match; the override is recorded.")}
+        values={gate.allowedCommands}
+        busy={busy}
+        onCommit={(values) => void patchGate({ allowedCommands: values })}
+      />
+      <ListField
+        label={t("jevDisallowedCommands", "Deny patterns")}
+        hint={t(
+          "jevDisallowedCommandsHint",
+          "Blocked before Jev is asked. Patterns never match commands with shell control syntax.",
+        )}
+        values={gate.disallowedCommands}
+        busy={busy}
+        onCommit={(values) => void patchGate({ disallowedCommands: values })}
+      />
+      <ListField
+        label={t("jevExtraProtectedPaths", "Extra protected paths")}
+        hint={t("jevExtraProtectedPathsHint", "Writes here are judged even inside the project.")}
+        values={gate.extraProtectedPaths}
+        busy={busy}
+        onCommit={(values) => void patchGate({ extraProtectedPaths: values })}
+      />
+      <Row label={t("jevPolicyNotes", "Policy the gate must respect")}>
+        <textarea
+          defaultValue={gate.policyNotes}
+          disabled={busy}
+          rows={3}
+          placeholder={t("jevPolicyNotesPlaceholder", "e.g. never push to main; ask before installing dependencies")}
+          onBlur={(event) => void patchGate({ policyNotes: event.target.value })}
+          style={textareaStyle}
+        />
+      </Row>
+
+      <div style={{ marginTop: 6 }}>
+        <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+          {t("jevThresholds", "Condition thresholds")} ·{" "}
+          {t(
+            "jevThresholdsHint",
+            "p at or above the threshold satisfies a condition; at or below 1−threshold rejects it. The band between is the middle band.",
+          )}
+        </span>
+        <div style={{ display: "grid", gap: 6, marginTop: 8 }}>
+          {rules.map((rule) => {
+            const value = gate.thresholds[rule.id] ?? rule.threshold;
+            const draft = thresholdDraft[rule.id] ?? String(value);
+            return (
+              <div key={rule.id} style={ruleRowStyle}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 12, color: "var(--text)" }}>
+                    {rule.id} · {rule.label}
+                  </div>
+                  <div style={{ fontSize: 10, color: "var(--text-dim)" }}>
+                    {rule.mode} / {rule.severity} · {t("jevRuleDefault", "default")} {rule.threshold}
+                  </div>
+                </div>
+                <input
+                  type="number"
+                  min={0.51}
+                  max={1}
+                  step={0.005}
+                  value={draft}
+                  disabled={busy}
+                  onChange={(event) => setThresholdDraft((prev) => ({ ...prev, [rule.id]: event.target.value }))}
+                  onBlur={() => {
+                    const parsed = Number(draft);
+                    const next = { ...gate.thresholds };
+                    // A threshold must keep a middle band: out-of-range input is
+                    // dropped rather than clamped into a meaningless value.
+                    if (!Number.isFinite(parsed) || parsed <= 0.5 || parsed > 1) delete next[rule.id];
+                    else next[rule.id] = parsed;
+                    void patchGate({ thresholds: next });
+                  }}
+                  style={{ ...inputStyle, maxWidth: 110 }}
+                />
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </Section>
+  );
+}
+
+function CompactionSection({
+  settings,
+  busy,
+  onUpdate,
+}: {
+  settings: JevSettingsPayload;
+  busy: boolean;
+  onUpdate: (patch: unknown) => Promise<void>;
+}) {
+  const { t } = useI18n();
+  const compaction = settings.compaction;
+  const patch = (next: Record<string, unknown>) => onUpdate({ compaction: { ...compaction, ...next } });
+  const numberField = (label: string, key: keyof typeof compaction, min: number, max: number, step = 0.05) => (
+    <Row label={label}>
+      <input
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        defaultValue={compaction[key] as number}
+        disabled={busy}
+        onBlur={(event) => void patch({ [key]: Number(event.target.value) })}
+        style={{ ...inputStyle, maxWidth: 140 }}
+      />
+    </Row>
+  );
+
+  return (
+    <Section
+      title={t("jevCompaction", "Context compaction")}
+      description={t(
+        "jevCompactionDescription",
+        "Only for pi's own context compaction (the window filling up, or /compact). It keeps user and assistant text verbatim, drops obsolete tool calls and bounds long results. “Compact to memory” keeps using this app's own distillation.",
+      )}
+    >
+      <Row label={t("jevCompactionEnabled", "Use Jev for context compaction")}>
+        <Checkbox checked={compaction.enabled} disabled={busy} onChange={(value) => void patch({ enabled: value })} />
+      </Row>
+      {numberField(t("jevKeepThreshold", "Keep threshold"), "keepThreshold", 0, 1)}
+      {numberField(t("jevBorderline", "Borderline band"), "borderline", 0, 0.5)}
+      {numberField(t("jevTruncateHead", "Result head kept (chars)"), "truncateHeadChars", 0, 10_000, 10)}
+      {numberField(t("jevMinReduction", "Minimum reduction"), "minReduction", 0, 0.95)}
+      {numberField(t("jevMaxStateTokens", "State budget (tokens)"), "maxStateTokens", 1000, 400_000, 1000)}
+      {numberField(t("jevMaxRequestTokens", "Request budget (tokens)"), "maxRequestTokens", 1000, 400_000, 1000)}
+    </Section>
+  );
+}
+
+function RoutingSection({
+  settings,
+  busy,
+  onUpdate,
+}: {
+  settings: JevSettingsPayload;
+  busy: boolean;
+  onUpdate: (patch: unknown) => Promise<void>;
+}) {
+  const { t } = useI18n();
+  const routing = settings.routing;
+  const patch = (next: Record<string, unknown>) => onUpdate({ routing: { ...routing, ...next } });
+  const textField = (label: string, key: keyof typeof routing) => (
+    <Row label={label}>
+      <input
+        defaultValue={(routing[key] as string | null) ?? ""}
+        disabled={busy}
+        placeholder="provider/model-id:thinking"
+        onBlur={(event) => {
+          const value = event.target.value.trim();
+          void patch({ [key]: value ? value : null });
+        }}
+        style={inputStyle}
+        spellCheck={false}
+      />
+    </Row>
+  );
+
+  return (
+    <Section
+      title={t("jevRouting", "Model routing")}
+      description={t(
+        "jevRoutingDescription",
+        "An independent mode: when it is on, Jev rates each request and a confidently easy or hard one switches model before the turn. Everything else — including any failure — keeps the model you picked.",
+      )}
+    >
+      <Row label={t("jevRoutingMode", "Mode")}>
+        <select
+          value={routing.mode}
+          disabled={busy}
+          onChange={(event) => void patch({ mode: event.target.value })}
+          style={selectStyle}
+        >
+          <option value="off">{t("jevRoutingOff", "Off (use the model I pick)")}</option>
+          <option value="jev">{t("jevRoutingOn", "Jev decides per turn")}</option>
+        </select>
+      </Row>
+      {textField(t("jevRoutingCheap", "Easy requests"), "cheap")}
+      {textField(t("jevRoutingStrong", "Hard requests"), "strong")}
+      {textField(t("jevRoutingCheapThinking", "Easy thinking level"), "cheapThinking")}
+      {textField(t("jevRoutingStrongThinking", "Hard thinking level"), "strongThinking")}
+      <Row label={t("jevRoutingEasyMax", "Easy at or below")}>
+        <input
+          type="number"
+          min={0}
+          max={2}
+          step={0.5}
+          defaultValue={routing.easyMax}
+          disabled={busy}
+          onBlur={(event) => void patch({ easyMax: Number(event.target.value) })}
+          style={{ ...inputStyle, maxWidth: 120 }}
+        />
+      </Row>
+      <Row label={t("jevRoutingHardMin", "Hard at or above")}>
+        <input
+          type="number"
+          min={0}
+          max={2}
+          step={0.5}
+          defaultValue={routing.hardMin}
+          disabled={busy}
+          onBlur={(event) => void patch({ hardMin: Number(event.target.value) })}
+          style={{ ...inputStyle, maxWidth: 120 }}
+        />
+      </Row>
+      <Row label={t("jevRoutingMinConfidence", "Minimum confidence")}>
+        <input
+          type="number"
+          min={0}
+          max={1}
+          step={0.05}
+          defaultValue={routing.minConfidence}
+          disabled={busy}
+          onBlur={(event) => void patch({ minConfidence: Number(event.target.value) })}
+          style={{ ...inputStyle, maxWidth: 120 }}
+        />
+      </Row>
+    </Section>
+  );
+}
+
+/** A newline-separated list, committed on blur so typing stays cheap. */
+function ListField({
+  label,
+  hint,
+  values,
+  busy,
+  onCommit,
+}: {
+  label: string;
+  hint: string;
+  values: string[];
+  busy: boolean;
+  onCommit: (values: string[]) => void;
+}) {
+  return (
+    <div
+      style={{
+        display: "grid",
+        gap: 6,
+        padding: "10px 12px",
+        border: "1px solid var(--border)",
+        borderRadius: 8,
+        background: "var(--bg-panel)",
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+        <span style={{ fontSize: 13, color: "var(--text-muted)" }}>{label}</span>
+        <span style={{ fontSize: 10, color: "var(--text-dim)", textAlign: "right", maxWidth: 340 }}>{hint}</span>
+      </div>
+      <textarea
+        defaultValue={values.join("\n")}
+        disabled={busy}
+        rows={3}
+        onBlur={(event) =>
+          onCommit(
+            event.target.value
+              .split("\n")
+              .map((line) => line.trim())
+              .filter(Boolean),
+          )
+        }
+        style={textareaStyle}
+        spellCheck={false}
+      />
     </div>
   );
 }
@@ -263,6 +620,31 @@ function Checkbox({
     />
   );
 }
+
+const textareaStyle = {
+  width: "100%",
+  minWidth: 0,
+  padding: "6px 10px",
+  fontSize: 12,
+  fontFamily: "var(--font-mono)",
+  lineHeight: 1.5,
+  color: "var(--text)",
+  background: "var(--bg)",
+  border: "1px solid var(--border)",
+  borderRadius: 6,
+  resize: "vertical",
+} as const;
+
+const ruleRowStyle = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 16,
+  padding: "6px 12px",
+  border: "1px solid var(--border)",
+  borderRadius: 8,
+  background: "var(--bg-panel)",
+} as const;
 
 const selectStyle = {
   padding: "6px 10px",

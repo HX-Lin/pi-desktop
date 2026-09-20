@@ -291,3 +291,42 @@ test("a session without compaction still renders its full history", () => {
   assert.equal(context.totalMessageCount, 2);
   assert.equal(context.memory.length, 0);
 });
+
+test("gate decisions are surfaced, other custom entries stay out of the chat", () => {
+  const entries = [
+    { type: "message", id: "u1", parentId: null, timestamp, message: { role: "user", content: "do it" } },
+    {
+      type: "custom",
+      id: "c1",
+      parentId: "u1",
+      timestamp,
+      customType: "jev-auto-mode-decision",
+      data: {
+        tool: "bash",
+        status: "blocked",
+        summary: "bash: rm -rf /",
+        rationale: "Non-negotiable safety rule matched.",
+        conditions: [{ ruleId: "intent_coverage", probability: 0.04, threshold: 0.6, verdict: "rejected" }],
+      },
+    },
+    {
+      type: "custom",
+      id: "c2",
+      parentId: "c1",
+      timestamp,
+      // Another extension's bookkeeping must not become a chat message.
+      customType: "pi-condense-diagnostic",
+      data: { note: "flushed" },
+    },
+  ];
+
+  const context = buildSessionContext(entries);
+
+  assert.equal(context.messages.length, 2);
+  const decision = context.messages[1];
+  assert.equal(decision.customType, "jev-auto-mode-decision");
+  assert.match(decision.content, /blocked: bash/);
+  assert.match(decision.content, /safety rule matched/);
+  // The per-condition table rides along for the record view.
+  assert.equal(decision.details.conditions[0].ruleId, "intent_coverage");
+});

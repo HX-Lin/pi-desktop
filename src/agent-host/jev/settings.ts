@@ -28,6 +28,8 @@ export interface JevGateSettings {
   extraProtectedPaths: string[];
   /** Per-rule probability overrides, keyed by rule id. */
   thresholds: Record<string, number>;
+  /** Free-form user policy the `policy_compliance` condition is judged against. */
+  policyNotes: string;
 }
 
 export interface JevCompactionSettings {
@@ -81,6 +83,7 @@ export function defaultJevSettings(): JevSettings {
       disallowedCommands: [],
       extraProtectedPaths: [],
       thresholds: {},
+      policyNotes: "",
     },
     compaction: {
       enabled: false,
@@ -174,6 +177,7 @@ export function normalizeJevSettings(raw: unknown): JevSettings {
       disallowedCommands: stringList(gate.disallowedCommands),
       extraProtectedPaths: stringList(gate.extraProtectedPaths),
       thresholds: thresholds(gate.thresholds),
+      policyNotes: typeof gate.policyNotes === "string" ? gate.policyNotes.slice(0, 20_000) : "",
     },
     compaction: {
       enabled: boolean(compaction.enabled, defaults.compaction.enabled),
