@@ -80,6 +80,7 @@ import { countBranchConversationMessages, countBranchConversationTurns } from ".
 import { readHostSettings, writeHostSettings } from "./host-settings";
 import type { ContextFoldCommand } from "../shared/api-types";
 import { applyFoldCommand, emptyFoldSnapshot, peekFoldSession } from "./context-fold";
+import { readJevConfig, setJevKey, testJevChannel, updateJevConfig } from "./jev/service";
 import { readMemoryOverview } from "./memory-store";
 import { callMain } from "./parent-rpc";
 import { createAuthLoginService, resolveLoginCode } from "./auth-login";
@@ -620,6 +621,20 @@ export function registerHandlers(server: RpcServer): () => Promise<void> {
       }
       return { content: lines.join("\n"), suggestedName: `session-${id}.md` };
     },
+
+    "jev.getConfig": async () => readJevConfig(),
+
+    "jev.updateConfig": async (params) => {
+      const { patch } = params as { patch?: unknown };
+      return updateJevConfig(patch ?? {});
+    },
+
+    "jev.setKey": async (params) => {
+      const { apiKey } = params as { apiKey?: string };
+      return setJevKey(typeof apiKey === "string" ? apiKey : "");
+    },
+
+    "jev.test": async () => testJevChannel(),
 
     "context.map": async (params) => {
       const { sessionId } = params as { sessionId: string };

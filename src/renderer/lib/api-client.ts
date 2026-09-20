@@ -231,6 +231,23 @@ export async function cancelModelsRefresh(requestId: string) {
   return call("models.refreshCancel", { requestId });
 }
 
+/** Jev: channel configuration, keys and the connectivity probe. */
+export async function jevGetConfig() {
+  return call("jev.getConfig");
+}
+
+export async function jevUpdateConfig(patch: unknown) {
+  return call("jev.updateConfig", { patch });
+}
+
+export async function jevSetKey(apiKey: string) {
+  return call("jev.setKey", { apiKey });
+}
+
+export async function jevTest() {
+  return call("jev.test");
+}
+
 /** The context window as the fold engine sees it. */
 export async function contextMap(sessionId: string) {
   return call("context.map", { sessionId });

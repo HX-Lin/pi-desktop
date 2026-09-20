@@ -23,6 +23,73 @@ export interface SkillUpdateParams {
   content?: string;
 }
 
+/** Jev: one channel's resolved status, as the Settings page shows it. */
+export interface JevChannelStatus {
+  id: string;
+  label: string;
+  protocol: "decisions" | "chat";
+  baseUrl: string;
+  model: string;
+  keyHint: string;
+  keySource: "env" | "vault" | null;
+  keyVariable: string | null;
+  hasKey: boolean;
+}
+
+export interface JevConfigPayload {
+  settings: JevSettingsPayload;
+  channel: JevChannelStatus;
+  channels: Array<{ id: string; label: string; protocol: "decisions" | "chat"; keyHint: string }>;
+}
+
+/** Mirrors the host's JevSettings shape (kept structural, no host import). */
+export interface JevSettingsPayload {
+  enabled: boolean;
+  channel: string;
+  model: string | null;
+  baseUrl: string | null;
+  gate: {
+    enabled: boolean;
+    scope: "all" | "matched";
+    uncertain: "deny" | "ask" | "allow";
+    timeoutMs: number;
+    maxRetries: number;
+    safeCommands: string[];
+    allowedCommands: string[];
+    disallowedCommands: string[];
+    extraProtectedPaths: string[];
+    thresholds: Record<string, number>;
+  };
+  compaction: {
+    enabled: boolean;
+    keepThreshold: number;
+    borderline: number;
+    truncateHeadChars: number;
+    minReduction: number;
+    maxStateTokens: number;
+    maxRequestTokens: number;
+  };
+  routing: {
+    mode: "off" | "jev";
+    cheap: string | null;
+    strong: string | null;
+    cheapThinking: string | null;
+    strongThinking: string | null;
+    easyMax: number;
+    hardMin: number;
+    minConfidence: number;
+  };
+}
+
+export interface JevTestResult {
+  ok: boolean;
+  reason?: string;
+  message?: string;
+  model?: string;
+  probability?: number;
+  latencyMs?: number;
+}
+
 /** Kinds the fold engine distinguishes in the context window. */
 export type ContextBlockKind = "system" | "user" | "text" | "thinking" | "tool_call" | "tool_result";
 

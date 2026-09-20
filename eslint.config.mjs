@@ -38,6 +38,13 @@ export default tseslint.config(
         setImmediate: "readonly",
         structuredClone: "readonly",
         URL: "readonly",
+        // Node 22 test files that stub the network need these.
+        fetch: "readonly",
+        Response: "readonly",
+        Request: "readonly",
+        Headers: "readonly",
+        AbortController: "readonly",
+        AbortSignal: "readonly",
       },
     },
   },

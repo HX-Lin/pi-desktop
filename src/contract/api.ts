@@ -18,6 +18,7 @@ import type {
   TestResult,
   WorktreeInfo,
 } from "./types";
+import type { JevConfigPayload, JevTestResult } from "../shared/api-types";
 import type {
   ContextFoldCommand,
   ContextFoldResult,
@@ -204,6 +205,23 @@ export interface Api {
     params: { path: string; sourceSessionId?: string };
     result: { base64: string; size: number; mime: string };
   };
+  "jev.getConfig": {
+    params: void;
+    result: JevConfigPayload;
+  };
+  "jev.updateConfig": {
+    params: { patch: unknown };
+    result: JevConfigPayload;
+  };
+  "jev.setKey": {
+    params: { apiKey: string };
+    result: JevConfigPayload;
+  };
+  "jev.test": {
+    params: void;
+    result: JevTestResult;
+  };
+
   "context.map": {
     params: { sessionId: string };
     result: ContextMapSnapshot;

@@ -13,6 +13,7 @@ import {
 import { ModelsConfig } from "./ModelsConfig";
 import { SkillsConfig } from "./SkillsConfig";
 import { PromptsConfig } from "./PromptsConfig";
+import { JevConfig } from "./JevConfig";
 import { PluginsConfig } from "./PluginsConfig";
 import { ToolchainsConfig } from "./ToolchainsConfig";
 import { BrowserSettings } from "./browser/BrowserSettings";
@@ -31,7 +32,7 @@ import {
 import appIconUrl from "../../../build/icon.png";
 
 export type SettingsTab =
-  "general" | "browser" | "channels" | "models" | "tools" | "skills" | "prompts" | "plugins" | "about";
+  "general" | "browser" | "channels" | "models" | "tools" | "skills" | "prompts" | "plugins" | "jev" | "about";
 
 interface SettingsConfigProps {
   cwd: string | null;
@@ -89,6 +90,7 @@ export function SettingsConfig({
     { id: "skills", label: t("skills", "Skills") },
     { id: "prompts", label: t("prompts", "Prompts") },
     { id: "plugins", label: t("plugins", "Plugins") },
+    { id: "jev", label: t("jevTitle", "Jev") },
     { id: "browser", label: t("browser", "Browser") },
     { id: "channels", label: t("channels", "Channels") },
     { id: "tools", label: t("developerTools", "Developer Tools") },
@@ -305,6 +307,7 @@ export function SettingsConfig({
               ) : (
                 <ProjectRequired />
               ))}
+            {activeTab === "jev" && <JevConfig />}
             {activeTab === "about" && <AboutSettings onClose={onClose} />}
           </div>
         </div>
