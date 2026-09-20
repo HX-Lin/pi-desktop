@@ -538,6 +538,7 @@ const zhCN: Record<string, string> = {
   jevTest: "连通性",
   jevTestRun: "测试",
   jevTestIdle: "尚未测试",
+  jevTestNoKey: "请先保存密钥",
   jevTestOk: "{ms} ms 内返回 {probability}（{model}）",
   jevGate: "权限闸门",
   jevGateDescription:

@@ -14,6 +14,8 @@ export function JevConfig() {
   const { t } = useI18n();
   const [config, setConfig] = useState<JevConfigPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** The last key/test failure, shown next to the field that caused it. */
+  const [keyError, setKeyError] = useState<string | null>(null);
   const [keyDraft, setKeyDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [test, setTest] = useState<JevTestResult | null>(null);
@@ -47,12 +49,17 @@ export function JevConfig() {
   const saveKey = useCallback(async () => {
     setBusy(true);
     setTest(null);
+    setKeyError(null);
     try {
       setConfig(await jevSetKey(keyDraft));
       setKeyDraft("");
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const message = e instanceof Error ? e.message : String(e);
+      // Shown next to the field as well: the shared error line sits at the very
+      // bottom of this page, below three long sections.
+      setKeyError(message);
+      setError(message);
     } finally {
       setBusy(false);
     }
@@ -61,10 +68,13 @@ export function JevConfig() {
   const runTest = useCallback(async () => {
     setBusy(true);
     setTest(null);
+    setKeyError(null);
     try {
       setTest(await jevTest());
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const message = e instanceof Error ? e.message : String(e);
+      setKeyError(message);
+      setError(message);
     } finally {
       setBusy(false);
     }
@@ -196,15 +206,18 @@ export function JevConfig() {
                       .replace("{ms}", String(test.latencyMs ?? 0))
                       .replace("{model}", test.model ?? "?")
                   : `${test.reason ?? "error"}: ${test.message ?? ""}`
-                : t("jevTestIdle", "Not tested yet")}
+                : channel.hasKey
+                  ? t("jevTestIdle", "Not tested yet")
+                  : t("jevTestNoKey", "Save a key first")}
             </span>
           </div>
         </Row>
+        {keyError ? <p style={{ color: "#ef4444", fontSize: 12, margin: "2px 0 0" }}>{keyError}</p> : null}
       </Section>
 
       <Divider />
 
-      <GateSection settings={settings} rules={config.rules} busy={busy} onUpdate={update} />
+      <GateSection settings={settings} rules={config.rules} busy={busy} hasKey={channel.hasKey} onUpdate={update} />
 
       <Divider />
 
@@ -224,11 +237,13 @@ function GateSection({
   settings,
   rules,
   busy,
+  hasKey,
   onUpdate,
 }: {
   settings: JevSettingsPayload;
   rules: JevConfigPayload["rules"];
   busy: boolean;
+  hasKey: boolean;
   onUpdate: (patch: unknown) => Promise<void>;
 }) {
   const { t } = useI18n();
@@ -247,6 +262,17 @@ function GateSection({
       <Row label={t("jevGateEnabled", "Gate tool calls")}>
         <Checkbox checked={gate.enabled} disabled={busy} onChange={(value) => void patchGate({ enabled: value })} />
       </Row>
+      {gate.enabled && !hasKey ? (
+        // Enabling the gate without a working key makes every call it cannot
+        // vouch for fail closed — including the assistant's own commands, which
+        // leaves no way to set the key from inside the app.
+        <p style={{ color: "#f59e0b", fontSize: 12, margin: "2px 0 0" }}>
+          {t(
+            "jevGateNoKeyWarning",
+            "还没有可用密钥：闸门无法判断，会拦截一切未被确定性规则担保的调用（包括让助手执行命令）。请先保存密钥，或把范围改为「只判断已识别的危险形状」。",
+          )}
+        </p>
+      ) : null}
       <Row label={t("jevGateScope", "Scope")}>
         <select
           value={gate.scope}

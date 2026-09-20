@@ -2,6 +2,7 @@ import { safeStorage } from "electron";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeCredentialKey as validateKey } from "./credential-keys";
 
 type VaultFile = {
   version: 1;
@@ -10,14 +11,6 @@ type VaultFile = {
 
 /** Prefix used by the fallback (application-key AES) encryption. */
 const FALLBACK_PREFIX = "v2.";
-
-function validateKey(key: string): string {
-  const trimmed = key.trim();
-  if (!/^channel:(weixin|telegram|feishu):[a-z0-9._-]{1,160}$/i.test(trimmed)) {
-    throw new Error("Invalid channel credential key");
-  }
-  return trimmed;
-}
 
 /**
  * AES-256-GCM cipher keyed by an application-private key file. Used when the
