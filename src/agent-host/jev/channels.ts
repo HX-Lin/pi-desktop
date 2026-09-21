@@ -6,15 +6,18 @@
  * - `decisions` — the vendor's native protocol: `POST { model, state, questions }`
  *   and a body of `answers`. TypeSafe's System One endpoint and OpenRouter's
  *   Decisions API both speak it.
- * - `chat` — an OpenAI-compatible `chat/completions` endpoint (Vercel AI
- *   Gateway). There is no decisions route there, so the questions travel as a
- *   strict JSON request and the reply is validated the same way; see
- *   `transport.ts`.
+ * - `chat` — an OpenAI-compatible `chat/completions` endpoint. There is no
+ *   decisions route there, so the questions travel as a strict JSON request and
+ *   the reply is validated the same way; see `transport.ts`.
+ * - `evaluate` — Vercel AI Gateway's `/v1/evaluate`, the route that serves Jev.
+ *   The gateway lists Jev as its only `evaluation` model and does *not* serve it
+ *   over `chat/completions` (that answers 404 for every spelling of the slug).
+ *   The body is TypeSafe's System One shape with `noul` renamed to `boolean`.
  *
  * Channels are data, not code paths: adding a gateway means adding an entry.
  */
 
-export type JevProtocol = "decisions" | "chat";
+export type JevProtocol = "decisions" | "chat" | "evaluate";
 
 export interface JevChannelDefinition {
   id: string;
@@ -45,17 +48,13 @@ export const JEV_CHANNELS: readonly JevChannelDefinition[] = [
   },
   {
     id: "vercel",
-    label: "Vercel AI Gateway",
-    protocol: "chat",
-    baseUrl: "https://ai-gateway.vercel.sh/v1/chat/completions",
-    // The gateway proxies models rather than exposing a Jev route, and Jev's own
-    // model is not callable here: `typesafe-ai/jev` is the catalog's only entry of
-    // `type: "evaluation"` (no supported parameters, `max_tokens: 0`), so
-    // `chat/completions` answers 404 for it whatever the spelling. The 253
-    // `type: "language"` models are the ones this endpoint serves, and any of them
-    // can answer the questions — the request asks for JSON and the reply is
-    // validated field by field. This one is fast and cheap for a per-call gate.
-    model: "openai/gpt-5-mini",
+    label: "Vercel AI Gateway (Jev)",
+    protocol: "evaluate",
+    baseUrl: "https://ai-gateway.vercel.sh/v1/evaluate",
+    // The gateway's own route for Jev: `typesafe-ai/jev` is the catalog's only
+    // `type: "evaluation"` entry, so `chat/completions` answers 404 for it — the
+    // evaluation route is the one that serves it, in System One's shape.
+    model: "typesafe-ai/jev",
     apiKeyEnv: ["AI_GATEWAY_API_KEY", "VERCEL_AI_GATEWAY_API_KEY", "JEVC_API_KEY"],
     vaultKey: "jev.vercel",
     keyHint: "AI_GATEWAY_API_KEY",

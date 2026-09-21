@@ -89,8 +89,11 @@ test("writes persist, merge and resolve to an endpoint", () => {
 
   const endpoint = resolveJevEndpoint(partial);
   assert.equal(endpoint.channel.id, "vercel");
-  assert.equal(endpoint.channel.protocol, "chat");
-  assert.equal(endpoint.baseUrl, "https://ai-gateway.vercel.sh/v1/chat/completions");
+  // Jev is served on the evaluation route, not on chat/completions: the gateway
+  // lists it as its only `evaluation` model, and `chat/completions` answers 404
+  // for it however the slug is spelled.
+  assert.equal(endpoint.channel.protocol, "evaluate");
+  assert.equal(endpoint.baseUrl, "https://ai-gateway.vercel.sh/v1/evaluate");
   // The effective model comes from the channel definition; the value itself is
   // checked against the live catalog by `check-jev-slugs.sh`, because a wrong
   // slug is not caught until the user runs Test.

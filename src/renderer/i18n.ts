@@ -525,6 +525,7 @@ const zhCN: Record<string, string> = {
   jevDefaultsHint: "这两项留空即恢复该通道的默认值（灰色提示就是默认值）；手填过的值会一直覆盖它。",
   jevProtocol: "协议",
   jevProtocolChat: "chat/completions（JSON）",
+  jevProtocolEvaluate: "evaluate（Jev System One）",
   jevProtocolDecisions: "decisions（原生）",
   jevEndpoint: "端点",
   jevModel: "模型",

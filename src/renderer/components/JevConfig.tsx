@@ -129,7 +129,9 @@ export function JevConfig() {
           <span style={valueStyle}>
             {channel.protocol === "chat"
               ? t("jevProtocolChat", "chat/completions (JSON)")
-              : t("jevProtocolDecisions", "decisions (native)")}
+              : channel.protocol === "evaluate"
+                ? t("jevProtocolEvaluate", "evaluate (Jev System One)")
+                : t("jevProtocolDecisions", "decisions (native)")}
           </span>
         </Row>
 

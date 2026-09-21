@@ -19,7 +19,7 @@ await build({
   packages: "external",
   logLevel: "silent",
 });
-const { JevUnavailableError, createJevClient, describeHttpFailure } = await import(
+const { JevUnavailableError, createJevClient, describeHttpFailure, evaluateQuestions } = await import(
   `${pathToFileURL(output).href}?v=${Date.now()}`
 );
 
@@ -300,4 +300,93 @@ test("a gateway that rejects response_format is retried without it", async () =>
   assert.equal(other.ok, false);
   assert.equal(other.status, 400);
   assert.match(other.message, /Model 'typesafe\/jev-1.13' not found/);
+});
+
+test("the evaluation route speaks Jev's own vocabulary", async () => {
+  // `noul` is `boolean` here, and `criteria` is an array for score but a record
+  // for choice — verified against the live route's validation errors.
+  const converted = evaluateQuestions({
+    "rule.one": {
+      type: "noul",
+      instructions: { question: "does the call match the request?", judge: "value", reference: "context" },
+      criteria: { true: "it does", false: "it does not" },
+    },
+    difficulty: { type: "score", instructions: "how hard?", criteria: ["trivial", "moderate", "complex"] },
+    pick: { type: "choice", instructions: "which?", criteria: { a: "first", b: "second" } },
+  });
+
+  assert.deepEqual(converted["rule.one"], {
+    type: "boolean",
+    // Structured instructions pass through: the route accepts objects.
+    instructions: { question: "does the call match the request?", judge: "value", reference: "context" },
+    criteria: { true: "it does", false: "it does not" },
+  });
+  assert.deepEqual(converted.difficulty.criteria, ["trivial", "moderate", "complex"]);
+  assert.deepEqual(converted.pick.criteria, { a: "first", b: "second" });
+  // An array handed to a choice question still becomes a usable record.
+  assert.deepEqual(evaluateQuestions({ p: { type: "choice", criteria: ["a", "b"] } }).p.criteria, { a: "a", b: "b" });
+});
+
+test("the evaluation route sends the System One body and reads its answers", async () => {
+  const seen = [];
+  const c = createJevClient({
+    protocol: "evaluate",
+    baseUrl: "https://ai-gateway.vercel.sh/v1/evaluate",
+    model: "typesafe-ai/jev",
+    apiKey: "k",
+    timeoutMs: 5000,
+    fetch: async (url, init) => {
+      seen.push({ url, body: JSON.parse(init.body), auth: init.headers.authorization });
+      return jsonResponse({
+        answers: {
+          "rule.one": { probability: 0.93 },
+          difficulty: { score: 0.2 },
+          // A plain boolean answer for a boolean question.
+          "rule.two": { boolean: false },
+        },
+      });
+    },
+  });
+
+  const outcome = await c.ask(
+    { call: { tool: "bash", command: "ls" } },
+    {
+      "rule.one": { type: "noul", instructions: "ok?" },
+      "rule.two": { type: "noul", instructions: "bad?" },
+      difficulty: { type: "score", instructions: "how hard?", criteria: ["trivial", "moderate"] },
+    },
+  );
+
+  assert.equal(seen[0].url, "https://ai-gateway.vercel.sh/v1/evaluate");
+  assert.equal(seen[0].auth, "Bearer k");
+  assert.equal(seen[0].body.model, "typesafe-ai/jev");
+  assert.deepEqual(seen[0].body.state, { call: { tool: "bash", command: "ls" } });
+  assert.equal(seen[0].body.questions["rule.one"].type, "boolean");
+  assert.equal(seen[0].body.questions.difficulty.type, "score");
+
+  assert.equal(outcome.ok, true);
+  assert.equal(outcome.judgment.answers["rule.one"].noul, 0.93);
+  assert.equal(outcome.judgment.answers["rule.two"].noul, 0);
+  assert.equal(outcome.judgment.answers.difficulty.score, 0.2);
+  assert.deepEqual(outcome.judgment.missing, []);
+});
+
+test("an unfamiliar envelope is reported with the body, not as a missing answer", async () => {
+  const c = createJevClient({
+    protocol: "evaluate",
+    baseUrl: "https://ai-gateway.vercel.sh/v1/evaluate",
+    model: "typesafe-ai/jev",
+    apiKey: "k",
+    timeoutMs: 5000,
+    fetch: async () => jsonResponse({ verdicts: [{ name: "rule.one", value: 0.9 }] }),
+  });
+
+  const outcome = await c.ask({}, { "rule.one": { type: "noul", instructions: "ok?" } });
+
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.reason, "malformed_response");
+  // The point of the message: it shows what came back, so one Test click is
+  // enough to correct the reader instead of guessing twice.
+  assert.match(outcome.message, /verdicts/);
+  assert.match(outcome.message, /0\.9/);
 });

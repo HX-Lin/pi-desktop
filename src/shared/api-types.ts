@@ -27,7 +27,7 @@ export interface SkillUpdateParams {
 export interface JevChannelStatus {
   id: string;
   label: string;
-  protocol: "decisions" | "chat";
+  protocol: "decisions" | "chat" | "evaluate";
   /** Effective endpoint and model, i.e. the override when one is set. */
   baseUrl: string;
   model: string;
@@ -54,7 +54,7 @@ export interface JevRuleInfo {
 export interface JevConfigPayload {
   settings: JevSettingsPayload;
   channel: JevChannelStatus;
-  channels: Array<{ id: string; label: string; protocol: "decisions" | "chat"; keyHint: string }>;
+  channels: Array<{ id: string; label: string; protocol: "decisions" | "chat" | "evaluate"; keyHint: string }>;
   rules: JevRuleInfo[];
 }
 

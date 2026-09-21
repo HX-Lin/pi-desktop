@@ -15,7 +15,7 @@ import { DEFAULT_RULES } from "./gate/questions";
 export interface JevChannelStatus {
   id: string;
   label: string;
-  protocol: "decisions" | "chat";
+  protocol: "decisions" | "chat" | "evaluate";
   /** Effective endpoint and model, i.e. the override when one is set. */
   baseUrl: string;
   model: string;
@@ -32,7 +32,7 @@ export interface JevChannelStatus {
 export interface JevConfigPayload {
   settings: JevSettings;
   channel: JevChannelStatus;
-  channels: Array<{ id: string; label: string; protocol: "decisions" | "chat"; keyHint: string }>;
+  channels: Array<{ id: string; label: string; protocol: "decisions" | "chat" | "evaluate"; keyHint: string }>;
   rules: JevRuleInfo[];
 }
 

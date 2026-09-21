@@ -1,7 +1,7 @@
 /**
  * The Jev transport: one place that turns questions into answers.
  *
- * Two protocols, one result shape:
+ * Three protocols, one result shape:
  *
  * - `decisions` — the native `{ model, state, questions } -> { answers }` call
  *   (TypeSafe System One, OpenRouter Decisions API).
@@ -68,7 +68,7 @@ export class JevUnavailableError extends Error {
 
 export interface JevClientOptions {
   /** `decisions` posts the native body; `chat` posts one chat completion. */
-  protocol: "decisions" | "chat";
+  protocol: "decisions" | "chat" | "evaluate";
   baseUrl: string;
   model: string;
   apiKey: string;
@@ -129,7 +129,9 @@ export function createJevClient(options: JevClientOptions): JevClient {
         const response =
           options.protocol === "chat"
             ? await requestChat(fetcher, options, state, questions, signal)
-            : await requestDecisions(fetcher, options, state, questions, signal);
+            : options.protocol === "evaluate"
+              ? await requestEvaluate(fetcher, options, state, questions, signal)
+              : await requestDecisions(fetcher, options, state, questions, signal);
         if (response.ok) {
           return {
             ok: true,
@@ -193,6 +195,85 @@ async function requestDecisions(
     return { ok: false, reason: "malformed_response", message: messageOf(error) };
   }
   return validateJudgment(parsed, Object.keys(questions));
+}
+
+// ---------------------------------------------------------------------------
+// Evaluation route (Vercel AI Gateway → Jev)
+// ---------------------------------------------------------------------------
+
+/**
+ * Vercel's `/v1/evaluate`.
+ *
+ * The gateway does not serve Jev on `chat/completions` — Jev is its only
+ * `evaluation` model, and every spelling of the slug answers 404 there. It is
+ * served here instead, in TypeSafe's System One shape.
+ *
+ * Only the question vocabulary differs from the native endpoint: what upstream
+ * calls `noul` is `boolean`, and `criteria` is an array for `score` but a record
+ * for `choice`. Instructions may stay structured objects, which is what the gate
+ * sends (`{question, judge, reference, note}`).
+ */
+async function requestEvaluate(
+  fetcher: typeof fetch,
+  options: JevClientOptions,
+  state: unknown,
+  questions: Record<string, JevQuestionShape>,
+  signal: AbortSignal,
+): Promise<JevOutcome> {
+  const response = await fetcher(options.baseUrl, {
+    method: "POST",
+    headers: { authorization: `Bearer ${options.apiKey}`, "content-type": "application/json" },
+    body: JSON.stringify({ model: options.model, state: state ?? {}, questions: evaluateQuestions(questions) }),
+    signal,
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    return { ok: false, reason: "http", status: response.status, message: describeHttpFailure(response.status, text) };
+  }
+
+  const payload = parseJson(text);
+  if (!isRecord(payload)) {
+    return unreadableReply("the evaluation reply was not JSON", text);
+  }
+  const judgment = validateJudgment(payload, Object.keys(questions));
+  if (!judgment.ok) return judgment;
+  if (Object.keys(judgment.judgment.answers).length === 0) {
+    // Rather than "no answer", show what actually arrived: this is the one part
+    // of the route that cannot be derived from the public schema.
+    return unreadableReply("the reply held no answer in a recognised shape", text);
+  }
+  return { ok: true, judgment: judgment.judgment };
+}
+
+/** `malformed_response`, with the body, so a wrong guess is diagnosable. */
+function unreadableReply(reason: string, text: string): JevOutcome {
+  const excerpt = text.replace(/\s+/g, " ").trim().slice(0, 300);
+  return { ok: false, reason: "malformed_response", message: excerpt ? `${reason}: ${excerpt}` : reason };
+}
+
+/** Translate the shared question vocabulary into the evaluation route's. */
+export function evaluateQuestions(
+  questions: Record<string, JevQuestionShape>,
+): Record<string, Record<string, unknown>> {
+  const converted: Record<string, Record<string, unknown>> = {};
+  for (const [key, question] of Object.entries(questions)) {
+    converted[key] = evaluateQuestion(question);
+  }
+  return converted;
+}
+
+function evaluateQuestion(question: JevQuestionShape): Record<string, unknown> {
+  const entry: Record<string, unknown> = { type: question.type === "noul" ? "boolean" : question.type };
+  if (question.instructions !== undefined) entry.instructions = question.instructions;
+  const criteria = question.criteria;
+  if (criteria !== undefined && criteria !== null) {
+    // `score` takes an array of levels; `choice` and `boolean` take a record.
+    if (question.type === "score") entry.criteria = Array.isArray(criteria) ? criteria : Object.values(criteria);
+    else if (Array.isArray(criteria)) {
+      entry.criteria = Object.fromEntries(criteria.map((item) => [String(item), String(item)]));
+    } else entry.criteria = criteria;
+  }
+  return entry;
 }
 
 // ---------------------------------------------------------------------------
@@ -261,7 +342,7 @@ async function requestChat(
 /** `{"answers":{…}}`, or the answer map itself if the model flattened it. */
 function validateJudgment(payload: unknown, keys: string[]): JevOutcome {
   if (!isRecord(payload)) return { ok: false, reason: "malformed_response", message: "payload was not an object" };
-  const source = isRecord(payload.answers) ? payload.answers : payload;
+  const source = answerContainer(payload);
   const answers: Record<string, JevAnswerValue> = {};
   const missing: string[] = [];
 
@@ -287,14 +368,43 @@ function validateJudgment(payload: unknown, keys: string[]): JevOutcome {
   };
 }
 
+/**
+ * Where a verdict set may sit in a reply.
+ *
+ * The native endpoint answers `{"answers":{…}}`; the evaluation route may wrap
+ * it (`results`, `evaluations`) or return entries as a list. All of them are
+ * accepted, because a wrapper we do not recognise is indistinguishable from "no
+ * answer" and would silently drop a decision.
+ */
+function answerContainer(payload: Record<string, unknown>): Record<string, unknown> {
+  for (const key of ["answers", "results", "evaluations", "output"]) {
+    const value = payload[key];
+    if (isRecord(value)) return value;
+    if (Array.isArray(value)) {
+      const mapped: Record<string, unknown> = {};
+      for (const item of value) {
+        if (!isRecord(item)) continue;
+        const id = item.id ?? item.key ?? item.question;
+        if (typeof id === "string" && id) mapped[id] = item;
+      }
+      if (Object.keys(mapped).length > 0) return mapped;
+    }
+  }
+  return payload;
+}
+
 function normalizeAnswer(value: unknown): JevAnswerValue | null {
   // A bare probability is accepted: some gateways drop the wrapper.
   if (typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1) return { noul: value };
   if (!isRecord(value)) return null;
 
   const answer: JevAnswerValue = {};
-  const noul = probability(value.noul);
+  // `noul` is this codebase's name for the native endpoint's probability; the
+  // evaluation route answers a `boolean` question with `probability` or a plain
+  // boolean, and all three mean the same thing here.
+  const noul = probability(value.noul) ?? probability(value.probability);
   if (noul !== undefined) answer.noul = noul;
+  else if (typeof value.boolean === "boolean") answer.noul = value.boolean ? 1 : 0;
   const score = probability(value.score);
   if (score !== undefined) answer.score = score;
   if (typeof value.choice === "string" && value.choice.trim()) answer.choice = value.choice.trim();
