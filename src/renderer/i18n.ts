@@ -522,6 +522,7 @@ const zhCN: Record<string, string> = {
   jevChannelDescription:
     "判断请求发到哪里。TypeSafe 和 OpenRouter 走 Jev 原生的 decisions 协议；Vercel AI Gateway 和自定义端点通过 OpenAI 兼容的 chat 接口调用，模型只要求能按 JSON 回答我们的问题（Jev 模型最贴合，但不必是它）。",
   jevProvider: "服务商",
+  jevDefaultsHint: "这两项留空即恢复该通道的默认值（灰色提示就是默认值）；手填过的值会一直覆盖它。",
   jevProtocol: "协议",
   jevProtocolChat: "chat/completions（JSON）",
   jevProtocolDecisions: "decisions（原生）",

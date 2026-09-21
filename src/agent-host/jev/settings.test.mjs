@@ -91,13 +91,20 @@ test("writes persist, merge and resolve to an endpoint", () => {
   assert.equal(endpoint.channel.id, "vercel");
   assert.equal(endpoint.channel.protocol, "chat");
   assert.equal(endpoint.baseUrl, "https://ai-gateway.vercel.sh/v1/chat/completions");
-  // The slug in the gateway's own catalog (https://ai-gateway.vercel.sh/v1/models):
-  // the namespace is `typesafe-ai` and there is no version suffix. A wrong slug
-  // here is not caught until the user runs Test.
-  assert.equal(endpoint.model, "typesafe-ai/jev");
+  // The effective model comes from the channel definition; the value itself is
+  // checked against the live catalog by `check-jev-slugs.sh`, because a wrong
+  // slug is not caught until the user runs Test.
+  assert.equal(endpoint.model, endpoint.channel.model);
+  assert.match(endpoint.channel.model, /^[a-z0-9-]+\/[a-z0-9.-]+$/);
 
   // An explicit override wins over the channel default.
   const overridden = resolveJevEndpoint(writeJevSettings({ model: "custom/jev", baseUrl: "https://x/y" }));
   assert.equal(overridden.model, "custom/jev");
   assert.equal(overridden.baseUrl, "https://x/y");
+
+  // Clearing the override must give the channel default back: without this the
+  // only way out of a hand-typed slug was to edit the settings file.
+  const cleared = resolveJevEndpoint(writeJevSettings({ model: null, baseUrl: null }));
+  assert.equal(cleared.model, cleared.channel.model);
+  assert.equal(cleared.baseUrl, cleared.channel.baseUrl);
 });

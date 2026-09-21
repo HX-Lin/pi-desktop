@@ -137,10 +137,10 @@ export function JevConfig() {
           <input
             defaultValue={channel.baseUrl}
             disabled={busy}
-            placeholder="https://host/v1/chat/completions"
+            placeholder={channel.defaultBaseUrl || "https://host/v1/chat/completions"}
             onBlur={(event) => {
               const value = event.target.value.trim();
-              if (value && value !== channel.baseUrl) void update({ baseUrl: value });
+              if (value !== (channel.baseUrl ?? "")) void update({ baseUrl: value || null });
             }}
             style={inputStyle}
             spellCheck={false}
@@ -151,15 +151,18 @@ export function JevConfig() {
           <input
             defaultValue={channel.model}
             disabled={busy}
-            placeholder="model-name"
+            placeholder={channel.defaultModel || "model-name"}
             onBlur={(event) => {
               const value = event.target.value.trim();
-              if (value && value !== channel.model) void update({ model: value });
+              if (value !== (channel.model ?? "")) void update({ model: value || null });
             }}
             style={inputStyle}
             spellCheck={false}
           />
         </Row>
+        <p style={{ fontSize: 11, color: "var(--text-dim)", margin: "2px 0 0" }}>
+          {t("jevDefaultsHint", "这两项留空即恢复该通道的默认值（上面显示的就是默认值）；手填过的值会一直覆盖它。")}
+        </p>
       </Section>
 
       <Divider />

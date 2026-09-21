@@ -16,8 +16,12 @@ export interface JevChannelStatus {
   id: string;
   label: string;
   protocol: "decisions" | "chat";
+  /** Effective endpoint and model, i.e. the override when one is set. */
   baseUrl: string;
   model: string;
+  /** What clearing the override gives back, for the field placeholder. */
+  defaultBaseUrl: string;
+  defaultModel: string;
   keyHint: string;
   /** `env` / `vault` / null (nothing configured). */
   keySource: "env" | "vault" | null;
@@ -81,6 +85,8 @@ export async function describeJevChannel(settings: JevSettings): Promise<JevChan
     protocol: channel.protocol,
     baseUrl,
     model,
+    defaultBaseUrl: channel.baseUrl,
+    defaultModel: channel.model,
     keyHint: channel.keyHint,
     keySource: key.source,
     keyVariable: key.source === "env" ? key.envVariable : envKeyVariable(channel),

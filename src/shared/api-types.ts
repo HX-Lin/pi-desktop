@@ -28,8 +28,12 @@ export interface JevChannelStatus {
   id: string;
   label: string;
   protocol: "decisions" | "chat";
+  /** Effective endpoint and model, i.e. the override when one is set. */
   baseUrl: string;
   model: string;
+  /** What clearing the override gives back, for the field placeholder. */
+  defaultBaseUrl: string;
+  defaultModel: string;
   keyHint: string;
   keySource: "env" | "vault" | null;
   keyVariable: string | null;
