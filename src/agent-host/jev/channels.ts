@@ -48,9 +48,12 @@ export const JEV_CHANNELS: readonly JevChannelDefinition[] = [
     label: "Vercel AI Gateway",
     protocol: "chat",
     baseUrl: "https://ai-gateway.vercel.sh/v1/chat/completions",
-    // The gateway proxies models rather than exposing a Jev route, so the slug
-    // must be a model that can answer the questions. Override it in Settings.
-    model: "typesafe/jev-1.13",
+    // The gateway proxies models rather than exposing a Jev route. Its catalog
+    // (https://ai-gateway.vercel.sh/v1/models) lists the Jev endpoint as
+    // `typesafe-ai/jev` — note the `-ai`, and no version suffix. The slug must
+    // still be a model that can answer the questions; any capable model can,
+    // since the request asks for JSON and the reply is validated.
+    model: "typesafe-ai/jev",
     apiKeyEnv: ["AI_GATEWAY_API_KEY", "VERCEL_AI_GATEWAY_API_KEY", "JEVC_API_KEY"],
     vaultKey: "jev.vercel",
     keyHint: "AI_GATEWAY_API_KEY",

@@ -206,22 +206,33 @@ async function requestChat(
   questions: Record<string, JevQuestionShape>,
   signal: AbortSignal,
 ): Promise<JevOutcome> {
-  const body = JSON.stringify({
-    model: options.model,
-    temperature: 0,
-    response_format: { type: "json_object" },
-    messages: [
-      { role: "system", content: CHAT_SYSTEM_PROMPT },
-      { role: "user", content: JSON.stringify({ state, questions }) },
-    ],
-  });
-  const response = await fetcher(options.baseUrl, {
-    method: "POST",
-    headers: { authorization: `Bearer ${options.apiKey}`, "content-type": "application/json" },
-    body,
-    signal,
-  });
-  const text = await response.text();
+  const body = (withResponseFormat: boolean) =>
+    JSON.stringify({
+      model: options.model,
+      temperature: 0,
+      ...(withResponseFormat ? { response_format: { type: "json_object" } } : {}),
+      messages: [
+        { role: "system", content: CHAT_SYSTEM_PROMPT },
+        { role: "user", content: JSON.stringify({ state, questions }) },
+      ],
+    });
+  const post = async (withResponseFormat: boolean) => {
+    const response = await fetcher(options.baseUrl, {
+      method: "POST",
+      headers: { authorization: `Bearer ${options.apiKey}`, "content-type": "application/json" },
+      body: body(withResponseFormat),
+      signal,
+    });
+    return { response, text: await response.text() };
+  };
+
+  let { response, text } = await post(true);
+  if (!response.ok && rejectsResponseFormat(response.status, text)) {
+    // Evaluation-style endpoints sometimes reject the whole request over an
+    // OpenAI parameter they do not implement. The system prompt already demands
+    // JSON and the reply is parsed defensively, so the retry is safe.
+    ({ response, text } = await post(false));
+  }
   if (!response.ok) {
     return { ok: false, reason: "http", status: response.status, message: describeHttpFailure(response.status, text) };
   }
@@ -347,8 +358,10 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** What a status code usually means, so the fix is obvious from the message. */
-const STATUS_HINTS: Record<number, string> = {
+/** What a status code usually means, so the fix is obvious from the message. */ const STATUS_HINTS: Record<
+  number,
+  string
+> = {
   400: "the endpoint rejected the request",
   401: "the API key was rejected",
   402: "this endpoint requires billing or credits",
@@ -372,6 +385,12 @@ export function describeHttpFailure(status: number, body: string): string {
   const detail = providerMessage(body);
   if (detail) parts.push(detail);
   return parts.join(" · ");
+}
+
+/** True when a failure looks like a rejected `response_format` parameter. */
+function rejectsResponseFormat(status: number, body: string): boolean {
+  if (status !== 400) return false;
+  return /response_format|json_object|unsupported parameter|not supported/i.test(body);
 }
 
 /** The human-readable message inside a provider error envelope. */

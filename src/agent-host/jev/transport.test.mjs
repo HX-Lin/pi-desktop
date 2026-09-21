@@ -251,3 +251,53 @@ test("a provider failure keeps the provider's own words", () => {
   // Long bodies are bounded.
   assert.ok(describeHttpFailure(500, "x".repeat(2000)).length < 460);
 });
+
+test("a gateway that rejects response_format is retried without it", async () => {
+  const bodies = [];
+  const fetcher = async (_url, init) => {
+    const body = JSON.parse(init.body);
+    bodies.push(body);
+    if (bodies.length === 1) {
+      return jsonResponse({ error: { message: "Unsupported parameter: response_format" } }, 400);
+    }
+    return jsonResponse({
+      model: "typesafe-ai/jev",
+      choices: [{ message: { content: JSON.stringify({ answers: { difficulty: { score: 0.2, confidence: 0.9 } } }) } }],
+    });
+  };
+
+  const outcome = await createJevClient({
+    protocol: "chat",
+    baseUrl: "https://ai-gateway.vercel.sh/v1/chat/completions",
+    model: "typesafe-ai/jev",
+    apiKey: "k",
+    timeoutMs: 5000,
+    fetch: fetcher,
+  }).ask({ prompt: "say hi" }, { difficulty: { type: "score", instructions: "how hard?" } });
+
+  assert.equal(bodies.length, 2);
+  assert.deepEqual(bodies[0].response_format, { type: "json_object" });
+  assert.equal("response_format" in bodies[1], false, "the retry must drop the parameter");
+  assert.equal(outcome.ok, true);
+  assert.equal(outcome.judgment.answers.difficulty.score, 0.2);
+
+  // Any other 400 is reported as-is rather than retried.
+  const otherBodies = [];
+  const other = await createJevClient({
+    protocol: "chat",
+    baseUrl: "https://ai-gateway.vercel.sh/v1/chat/completions",
+    model: "m",
+    apiKey: "k",
+    timeoutMs: 5000,
+    maxRetries: 0,
+    fetch: async (_url, init) => {
+      otherBodies.push(JSON.parse(init.body));
+      return jsonResponse({ error: { message: "Model 'typesafe/jev-1.13' not found" } }, 400);
+    },
+  }).ask({ prompt: "x" }, { difficulty: { type: "score", instructions: "how hard?" } });
+
+  assert.equal(otherBodies.length, 1);
+  assert.equal(other.ok, false);
+  assert.equal(other.status, 400);
+  assert.match(other.message, /Model 'typesafe\/jev-1.13' not found/);
+});
